@@ -136,6 +136,8 @@ type
     procedure TestSF498;
     procedure TestSF499;
     procedure TestSF525;
+    // A test for https://zeoslib.sourceforge.io/viewtopic.php?t=200781
+    procedure TestForum200781;
   end;
 
   {** Implements a bug report test case for core components with MBCs. }
@@ -189,8 +191,15 @@ uses
   @param DataSet a database object.
 }
 procedure ZTestCompCoreBugReport.DataSetCalcFields(Dataset: TDataSet);
+var p_calc_x: TField;
 begin
   Dataset.FieldByName('p_calc').AsInteger := Dataset.RecNo + 100;
+  p_calc_x := Dataset.FindField('p_calc2');
+  if p_calc_x <> nil then
+    p_calc_x.AsString := Dataset.FieldByName('p_name').AsString + ' ' + Dataset.FieldByName('p_name').AsString;
+  p_calc_x := Dataset.FindField('p_calc3');
+  if p_calc_x <> nil then
+    p_calc_x.AsInteger := Dataset.FieldByName('p_id').AsInteger;
 end;
 
 {**
@@ -684,6 +693,7 @@ var
   Query: TZQuery;
   FieldDefs: TFieldDefs;
   CalcField: TField;
+  S: String;
 begin
   if SkipForReason([srClosedBug{$IFDEF FPC}, srNonZeos{$ENDIF}]) then Exit;
 
@@ -693,7 +703,7 @@ begin
     Query.ReadOnly := True;
     Query.OnCalcFields := DataSetCalcFields;
 
-    Query.SQL.Text := 'SELECT p_id FROM people';
+    Query.SQL.Text := 'SELECT p_id, p_name FROM people'; //add p_name for Ticket
     FieldDefs := Query.FieldDefs;
     FieldDefs.Update;
 
@@ -706,12 +716,34 @@ begin
     CalcField.Visible := True;
     CalcField.DataSet := Query;
 
+    CalcField := TStringField.Create(nil);
+    CalcField.Size := 200;
+    CalcField.FieldName := 'p_calc2';
+    CalcField.FieldKind := fkCalculated;
+    CalcField.Visible := True;
+    CalcField.DataSet := Query;
+
+    CalcField := TIntegerField.Create(nil);
+    CalcField.FieldName := 'p_calc3';
+    CalcField.FieldKind := fkCalculated;
+    CalcField.Visible := True;
+    CalcField.DataSet := Query;
+
     Query.Open;
     while not Query.Eof do
     begin
       Check(Query.FieldByName('p_calc').AsInteger <> 0);
+      Check(Query.FieldByName('p_calc2').AsString <> '');
       Query.Next;
     end;
+    Query.SortedFields := 'p_calc2 desc, p_calc';
+    Query.First;
+    S := Query.FieldByName('p_calc2').AsString;
+    Check(StartsWith(S, 'Yan'), 'Value of Calculatet Field2');
+    Query.Next;
+    S := Query.FieldByName('p_calc2').AsString;
+    Check(StartsWith(S, 'Vasia'), 'Value of Calculatet Field2');
+    Query.SortedFields := 'p_calc2 desc, p_calc';
     Query.Close;
   finally
     Query.Free;
@@ -2128,6 +2160,22 @@ begin
     Table.Post;
 
     Table.Locate('ID', 8, []);
+  finally
+    FreeAndNil(Table);
+  end;
+end;
+
+procedure ZTestCompCoreBugReport.TestForum200781;
+var
+  Table: TZMemTable;
+begin
+  Table := TZMemTable.Create(nil);
+  try
+    Table.FieldDefs.Clear;
+    Table.FieldDefs.Add('price', ftCurrency);
+    Table.Open;
+    CheckEquals(ftCurrency, Table.Fields[0].DataType);
+    Table.Close;
   finally
     FreeAndNil(Table);
   end;

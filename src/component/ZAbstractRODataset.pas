@@ -155,6 +155,7 @@ type
     FCurrentRow: Integer;
     FRowAccessor, FFieldsAccessor: TZRowAccessor;
     FResultSet2AccessorIndexList: TZIndexPairList;
+    FSortedFieldsAccessorOffSet: Integer;
     FClientCP: Word;
     FOldRowBuffer: PZRowBuffer;
     FNewRowBuffer: PZRowBuffer;
@@ -197,7 +198,6 @@ type
     FNativeFormatOverloadCalled: array[ftBCD..ftDateTime] of Boolean;
 
     {FFieldDefsInitialized: boolean;}  // commented out because this causes SF#286
-
     FDataLink: TDataLink;
     FMasterLink: TMasterDataLink;
     FLinkedFields: string;
@@ -1029,6 +1029,13 @@ type
   public
     procedure Clear; override;
   End;
+
+  TZCurrencyField = Class(TZDoubleField)
+  public
+    constructor Create(AOwner: TComponent); override;
+  published
+    property Currency default True;
+  end;
 
   TZSingleField = Class({$IFDEF WITH_FTSINGLE}TSingleField{$ELSE}TZDoubleField{$ENDIF})
   private
@@ -2722,6 +2729,7 @@ begin
       {$IFDEF WITH_WIDEMEMO}
       ftWideMemo: Result := TZUnicodeCLobField;
       {$ENDIF WITH_WIDEMEMO}
+      ftCurrency: Result := TZCurrencyField;
       else {ftBlob} Result := TZBLobField;
     end;
   end else
@@ -3137,6 +3145,8 @@ begin
   if GetActiveBuffer(RowBuffer) then
   begin
     ColumnIndex := DefineFieldIndex(FieldsLookupTable, Field);
+    if Field.FieldKind <> fkData then
+      ColumnIndex := ColumnIndex + FSortedFieldsAccessorOffSet; //in case of HighLevelsort oth nothing is done
     RowAccessor.RowBuffer := RowBuffer;
 
     if (State in [dsEdit, dsInsert]) and Assigned(Field.OnValidate) then begin
@@ -5318,7 +5328,8 @@ begin
         ftMemo, ftFmtMemo: begin
             FieldCP := GetTransliterateCodePage(FControlsCodePage);
             NativeCP := FResultSetMetadata.GetColumnCodePage(ColumnIndex);
-            if not ((FCharEncoding = ceUTF16) or
+
+            if (NativeCP <> zCP_UTF16) and not ((FCharEncoding = ceUTF16) or
       {XE10.3 x64 bug: a ObjectCast of a descendand doesn't work -> use exact class or the "As" operator}
               ((Field as TMemoField).Transliterate and (FieldCP <> NativeCP))) then
                 FieldCP := NativeCP;
@@ -5427,33 +5438,38 @@ begin
   end;
 end;
 
+function CreateAllFieldsAccessor(DataSet: TZAbstractRODataset): TZRowAccessor;
+var ColumnList: TObjectList;
+    I: Integer;
+    CP: Word;
+begin
+  ColumnList := TObjectList.Create(True);
+  try
+    ColumnList.Capacity := Length(DataSet.FFieldsLookupTable);
+    for i := 0 to high(DataSet.FFieldsLookupTable) do
+      if DataSet.FFieldsLookupTable[i].DataSource = dltResultSet then begin
+        CP := DataSet.FResultSetMetadata.GetColumnCodePage(DataSet.FFieldsLookupTable[i].Index);
+        ColumnList.Add(ConvertFieldToColumnInfo(TField(DataSet.FFieldsLookupTable[i].Field), CP))
+      end;
+    DataSet.FSortedFieldsAccessorOffSet := ColumnList.Count;
+    CP := GetTransliterateCodePage(DataSet.FControlsCodePage);
+    for i := 0 to high(DataSet.FFieldsLookupTable) do
+      if DataSet.FFieldsLookupTable[i].DataSource = dltAccessor then
+        ColumnList.Add(ConvertFieldToColumnInfo(TField(DataSet.FFieldsLookupTable[i].Field), CP));
+    Result := TZRowAccessor.Create(ColumnList, DataSet.FResultSet.GetConSettings, DataSet.FOpenLobStreams, DataSet.FLobCacheMode)
+  finally
+    ColumnList.Free;
+  end;
+end;
 {**
   Performs sorting of the internal rows.
 }
 {$IFDEF FPC} {$PUSH} {$WARN 4055 off : Conversion between ordinals and pointers is not portable} {$ENDIF}
 procedure TZAbstractRODataset.InternalSort;
 var
-  I: Integer;
+  I, j: Integer;
   RowNo: NativeInt;
-  SavedAccessor: TZRowAccessor;
-  function CreateAllFieldsAccessor: TZRowAccessor;
-  var ColumnList: TObjectList;
-      I: Integer;
-      CP: Word;
-  begin
-    ColumnList := TObjectList.Create(True);
-    try
-      for i := low(FFieldsLookupTable) to high(FFieldsLookupTable) do begin
-        if FFieldsLookupTable[i].DataSource = dltAccessor
-        then CP := GetTransliterateCodePage(FControlsCodePage)
-        else CP := FResultSetMetadata.GetColumnCodePage(FFieldsLookupTable[i].Index);
-        ColumnList.Add(ConvertFieldToColumnInfo(TField(FFieldsLookupTable[i].Field), CP))
-      end;
-      Result := TZRowAccessor.Create(ColumnList, ResultSet.GetConSettings, FOpenLobStreams, FLobCacheMode)
-    finally
-      ColumnList.Free;
-    end;
-  end;
+  SavedFieldsAccessor, SavedRowAccessor: TZRowAccessor;
 begin
   //if FIndexFieldNames = '' then exit;
   if (ResultSet <> nil) and not IsUniDirectional then begin
@@ -5481,8 +5497,10 @@ begin
         FCompareFuncs := ResultSet.GetCompareFuncs(FSortedFieldIndices, FSortedComparsionKinds);
         CurrentRows.Sort(LowLevelSort);
       end else begin
-        SavedAccessor := FFieldsAccessor;
-        FFieldsAccessor := CreateAllFieldsAccessor;
+        SavedFieldsAccessor := FFieldsAccessor;
+        SavedRowAccessor := FRowAccessor;
+        FFieldsAccessor := CreateAllFieldsAccessor(Self);
+        FRowAccessor := FFieldsAccessor;
         { Sorts using generic highlevel approach. }
         try
           { Allocates buffers for sorting. }
@@ -5491,17 +5509,25 @@ begin
           { Converts field objects into field indices. }
           SetLength(FSortedFieldIndices, Length(FSortedFieldRefs));
           for I := 0 to High(FSortedFieldRefs) do
-            FSortedFieldIndices[I] := DefineFieldIndex(FieldsLookupTable,
-              TField(FSortedFieldRefs[I].Field));
+            for J := 0 to High(FieldsLookupTable) do
+              if FSortedFieldRefs[I].Field = FieldsLookupTable[j].Field then begin
+                if TField(FSortedFieldRefs[I].Field).FieldKind = fkData then
+                  FSortedFieldIndices[I] := FieldsLookupTable[j].Index
+                else
+                  FSortedFieldIndices[I] := FieldsLookupTable[j].Index + FSortedFieldsAccessorOffSet;
+                Break;
+              end;
           { Performs sorting. }
           FCompareFuncs := FFieldsAccessor.GetCompareFuncs(FSortedFieldIndices, FSortedComparsionKinds);
           CurrentRows.Sort(HighLevelSort);
         finally
           { Disposed buffers for sorting. }
+          FSortedFieldsAccessorOffSet := 0;
           FFieldsAccessor.DisposeBuffer(FSortRowBuffer1);
           FFieldsAccessor.DisposeBuffer(FSortRowBuffer2);
           FreeAndNil(FFieldsAccessor);
-          FFieldsAccessor := SavedAccessor;
+          FRowAccessor := SavedRowAccessor;
+          FFieldsAccessor := SavedFieldsAccessor;
         end;
       end;
     end;
@@ -5556,7 +5582,6 @@ begin
   FFieldsAccessor.RowBuffer^.BookmarkFlag := Ord(bfCurrent);
   { fill data from CalcFields }
   GetCalcFields(TGetCalcFieldsParamType(FSortRowBuffer1));
-
   { Gets the second row. }
   RowNo := NativeInt(Item2);
   ResultSet.MoveAbsolute(RowNo);
@@ -5955,13 +5980,15 @@ type
   @param Buffer
 }
 procedure TZAbstractRODataset.ClearCalcFields(Buffer: TRecordBuffer);
-var
-  Index: Integer;
+var Index, fldIdx: Integer;
 begin
   RowAccessor.RowBuffer := PZRowBuffer(Buffer);
   for Index := 0 to Fields.Count-1 do
-    if (Fields[Index].FieldKind in [fkCalculated, fkLookup]) then
-      RowAccessor.SetNull(DefineFieldindex(FFieldsLookupTable,Fields[Index]));
+    if (Fields[Index].FieldKind in [fkCalculated, fkLookup]) then begin
+      //in case of Sorts CreateAllFieldsAccessor create an new Accessor according the FieldsLookupTable
+      fldIdx := DefineFieldindex(FFieldsLookupTable,Fields[Index])+FSortedFieldsAccessorOffSet;
+      RowAccessor.SetNull(fldIdx);
+    end;
 end;
 
 {=======================bangfauzan addition========================}
@@ -8587,6 +8614,15 @@ begin
   if TVarData(Value).VType <= 1 //in [varEmpty, varNull]
   then Clear
   else SetAsFloat(Value);
+end;
+
+{ TZCurrencyField }
+
+constructor TZCurrencyField.Create(AOwner: TComponent);
+begin
+  inherited;
+  SetDataType(ftCurrency);
+  Currency := True;
 end;
 
 { TZBCDField }

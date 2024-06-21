@@ -148,6 +148,7 @@ type
     FDecimalSep: Char;
     FClientCP: Word;
     FByteBuffer: PByteBuffer;
+    FTempStr: AnsiString;
     procedure CheckColumnIndex(ColumnIndex: Integer);
   protected
     FDBLibConnection: IZDBLibConnection;
@@ -581,26 +582,34 @@ begin
     Result := dbData;
     Len := dbDatLen;
     LastWasNull := Result = nil;
-    if not LastWasNull then
-      case TdsType of
-        tdsBinary, tdsBigBinary, tdsVarBinary, tdsBigVarBinary, tdsVarChar,
-        tdsBigVarChar, tdsText:
-            Exit;
-        tdsChar, tdsBigChar: begin
-              Len := ZDbcUtils.GetAbsorbedTrailingSpacesLen(Result, dbDatLen);
-            end;
-        tdsUnique: begin
-            Result := PAnsiChar(fByteBuffer);
-            GUIDToBuffer(dbData, Result, [guidWithBrackets]);
-            Len := 38;
-          end;
-        else begin
-          Result := PAnsiChar(FByteBuffer);
-          Len := FPlainDriver.dbconvert(FHandle, Ord(TDSType), dbData, Len,
-            Ord(tdsVarChar), Pointer(Result), SizeOf(TByteBuffer)-1);
-          //FDBLibConnection.CheckDBLibError(lcOther, 'GetPAnsiChar');
-        end;
+    if not LastWasNull then begin
+      if TDSType in [tdsBinary, tdsBigBinary, tdsVarBinary, tdsBigVarBinary, tdsVarChar, tdsBigVarChar, tdsText] then
+        Exit
+      else if TDSType in [tdsChar, tdsBigChar] then
+        Len := ZDbcUtils.GetAbsorbedTrailingSpacesLen(Result, dbDatLen)
+      else if TDSType = tdsUnique then begin
+        Result := PAnsiChar(fByteBuffer);
+        GUIDToBuffer(dbData, Result, [guidWithBrackets]);
+        Len := 38;
+      end else if tdstype = tdsMsTime then begin
+        FTempStr := AnsiString(FormatDateTime(GetStatement.GetConSettings^.ReadFormatSettings.TimeFormat, TdsDateTimeAllToDateTime(PDBDATETIMEALL(dbData)^)));
+        Result := PAnsiChar(FTempStr);
+        Len := Length(FTempStr);
+      end else if tdstype = tdsMsDate then begin
+        FTempStr := AnsiString(FormatDateTime(GetStatement.GetConSettings^.ReadFormatSettings.DateFormat, TdsDateTimeAllToDateTime(PDBDATETIMEALL(dbData)^)));
+        Result := PAnsiChar(FTempStr);
+        Len := Length(FTempStr);
+      end else if tdstype in [tdsMsDateTime2, tdsMsDateTimeOffset] then begin
+        FTempStr := AnsiString(FormatDateTime(GetStatement.GetConSettings^.ReadFormatSettings.DateTimeFormat, TdsDateTimeAllToDateTime(PDBDATETIMEALL(dbData)^)));
+        Result := PAnsiChar(FTempStr);
+        Len := Length(FTempStr);
+      end else begin
+        Result := PAnsiChar(FByteBuffer);
+        Len := FPlainDriver.dbconvert(FHandle, Ord(TDSType), dbData, Len,
+          Ord(tdsVarChar), Pointer(Result), SizeOf(TByteBuffer)-1);
+        //FDBLibConnection.CheckDBLibError(lcOther, 'GetPAnsiChar');
       end;
+    end;
   end;
 end;
 
@@ -1011,6 +1020,8 @@ Enc:    if FPlainDriver.DBLibraryVendorType = lvtFreeTDS //type diff
         then DT := PTDSDBDATETIME(Data)^.dtdays + 2 + (PTDSDBDATETIME(Data)^.dttime / 25920000)
         else DT := PDBDATETIME(Data)^.dtdays + 2 + (PDBDATETIME(Data)^.dttime / 25920000);
         DecodeDateTimeToTimeStamp(DT, Result);
+      end else if TDSType in [tdsMsTime, tdsMsDateTime2, tdsMsDate, tdsMsDateTimeOffset] then begin
+        TdsDateTimeAllToZeosTimeStamp(PDBDATETIMEALL(Data)^, Result);
       end else if (TDSType in [tdsNText, tdsNVarChar, tdsText, tdsVarchar, tdsChar]) then begin
         if (TDSType in [tdsNText, tdsChar]) then
           DL := ZDbcUtils.GetAbsorbedTrailingSpacesLen(PAnsichar(Data), DL);
