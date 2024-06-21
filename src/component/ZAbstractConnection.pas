@@ -391,6 +391,8 @@ type
     {$ENDIF UNICODE}
     function GetEncoding: TZW2A2WEncodingSource;
     procedure SetEncoding(Value: TZW2A2WEncodingSource);
+  protected
+    procedure AssignTo(Dest: TPersistent); override;
   public
     Constructor Create(AOwner: TZAbstractConnection);
     function GetRawTransliterateCodePage(Target: TZTransliterationType): Word;
@@ -1337,8 +1339,10 @@ begin
       end else if AComp.InheritsFrom(TZSequence) then try
         TZSequence(AComp).CloseSequence
       except end else if AComp.InheritsFrom(TZAbstractTransaction) then try
-        if TZAbstractTransaction(AComp).Active then
+        if TZAbstractTransaction(AComp).Active then begin
           TZProtectedMethodTransaction(AComp).GetIZTransaction.Close;
+          TZProtectedMethodTransaction(AComp).ReleaseInternalTransaction;
+        end;
       except end else if AComp.InheritsFrom(TAbstractActiveConnectionLinkedComponent) then try
         if TAbstractActiveConnectionLinkedComponent(AComp).Active then
           TAbstractActiveConnectionLinkedComponent(AComp).SetActive(False);
@@ -1738,6 +1742,22 @@ begin
   {$ENDIF}
 end;
 {$ENDIF UNICODE}
+
+procedure TZRawCharacterTransliterateOptions.AssignTo(Dest: TPersistent);
+begin
+  if Dest is TZRawCharacterTransliterateOptions then
+    with (Dest as TZRawCharacterTransliterateOptions) do begin
+      FConnection := Self.FConnection;
+      {$IFNDEF UNICODE}
+      FSQL := Self.FSQL;
+      {$ENDIF}
+      FEncoding := Self.FEncoding;
+      FParams := Self.Params;
+      FFields := Self.FFields;
+    end
+  else
+    inherited;
+end;
 
 { TZAbstractConnectionLinkedComponent }
 

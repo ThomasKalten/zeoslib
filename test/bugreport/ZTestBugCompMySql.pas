@@ -124,13 +124,16 @@ type
     procedure TestBigIntError;
     procedure TestBCD_Refresh_p156227;
     procedure TestTicket265;
+    //test for https://zeoslib.sourceforge.io/viewtopic.php?t=199899
+    procedure TestForum199899;
+    procedure TestForum199899_2;
   end;
 
 {$ENDIF ZEOS_DISABLE_MYSQL}
 implementation
 {$IFNDEF ZEOS_DISABLE_MYSQL}
 
-uses ZTestCase, ZDbcMySQL, ZSysUtils, ZDbcProperties, ZDbcMySqlMetadata;
+uses ZTestCase, ZDbcMySQL, ZSysUtils, ZDbcProperties, ZDbcMySqlMetadata, ZStoredProcedure;
 
 { TZTestCompMySQLBugReport }
 
@@ -1996,6 +1999,78 @@ begin
     FreeAndNil(tbl);
   end;
 end;
+
+procedure TZTestCompMySQLBugReport.TestForum199899;
+var
+  Proc: TZStoredProc;
+begin
+  Proc := TZStoredProc.Create(nil);
+  try
+    Proc.Connection := Connection;
+    Proc.StoredProcName := 'forum199899';
+    Proc.ParamByName('somevalue').AsString := '';
+    Proc.Open;
+
+    CheckEquals(1, Proc.RecordCount, 'Record Count');
+    Check(not Proc.Fields[0].IsNull, 'Result must not be null');
+    CheckEquals(0, Proc.Fields[0].AsInteger, 'String length');
+  finally
+    FreeAndNil(Proc);
+  end;
+end;
+
+procedure TZTestCompMySQLBugReport.TestForum199899_2;
+var
+  Proc: TZStoredProc;
+  val: String;
+begin
+  Proc := TZStoredProc.Create(nil);
+  try
+    Proc.Connection := Connection;
+
+    //############################
+    //test storedfunction<1>
+    //############################
+    Proc.Close;
+    Proc.StoredProcName :='FncForumT199899_1';
+    Proc.Params[1].value :='test_zeos';
+    Proc.Prepare;
+    Proc.Open;
+    val := Proc.Params[0].value;
+    CheckEquals('select * from test_zeos', val);
+    Proc.Close;
+
+    //############################
+    //test storedfunction<2>
+    //############################
+    Proc.Close;
+    Proc.StoredProcName :='FncForumT199899_2';
+    Proc.Params[1].asinteger :=0;
+    Proc.Params[2].asstring :='db_master_';
+    Proc.Prepare;
+    Proc.Open;
+    val:=Proc.Params[0].value;
+    CheckEquals('select * from db_master_zeos', val);
+    Proc.Close;
+
+    //############################
+    //test storedfunction<3>
+    //############################
+    Proc.StoredProcName :='ProcForumT199899_3';
+    Proc.Params[0].value :='TblForumT199899_1';
+    CheckEquals(2, Proc.Params.Count, 'Parameter count');
+    CheckEquals(0, Proc.ParamByName('in_tablename').Index);
+    CheckEquals(1, Proc.ParamByName('out_pcname').Index);
+    Proc.Prepare;
+    Proc.Open;
+    CheckEquals('desktop1', Proc.Params[1].AsString);
+    Proc.Close;
+  finally
+    FreeAndNil(Proc);
+  end;
+end;
+
+
 
 procedure TZTestCompMySQLBugReport.TestTicket304;
 var
