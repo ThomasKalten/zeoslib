@@ -60,7 +60,9 @@ uses
   {$IFDEF WITH_TOBJECTLIST_REQUIRES_SYSTEM_TYPES}System.Types{$IFNDEF NO_UNIT_CONTNRS}, Contnrs{$ENDIF}{$ELSE}Types{$ENDIF},
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
   ZPlainProxyDriverIntf, ZSysUtils, ZDbcIntfs, ZDbcResultSet, ZDbcLogging,{$IFDEF ZEOS73UP}FmtBCD, ZVariant, {$ENDIF}
-  ZDbcResultSetMetadata, ZCompatibility, {$IFDEF FPC}ZXmlCompat{$ELSE} XmlDoc, XmlIntf{$ENDIF};
+  ZDbcResultSetMetadata, ZCompatibility, {$IFDEF FPC}ZXmlCompat{$ELSE} XmlDoc, XmlIntf{$ENDIF}
+  {$IFDEF WITH_COLUMNS_TO_JSON}{$IFDEF MORMOT2}, mormot.db.core {$ENDIF}{$ENDIF}
+  ;
 
 type
   {** Implements DBC Layer Proxy ResultSet. }
@@ -316,6 +318,12 @@ type
     ///  The number of rows that were updated during the execution of the query.
     /// </returns>
     function GetUpdateCount: Integer;
+    {$IFDEF WITH_COLUMNS_TO_JSON}
+    /// <summary>Fill the JSONWriter with column data</summary>
+    /// <param>"JSONComposeOptions" the TZJSONComposeOptions used for composing
+    ///  the JSON contents</param>
+    procedure ColumnsToJSON(ResultsWriter: {$IFDEF MORMOT2}TResultsWriter{$ELSE}TJSONWriter{$ENDIF}; JSONComposeOptions: TZJSONComposeOptions);
+    {$ENDIF WITH_COLUMNS_TO_JSON}
   end;
 
   TZDbcProxyResultSetMetadata = Class(TZAbstractResultSetMetadata)
@@ -1608,6 +1616,17 @@ begin
     raise EZSQLException.Create('This resultset is forward only.');
   end;
 end;
+
+{$IFDEF WITH_COLUMNS_TO_JSON}
+/// <summary>Fill the JSONWriter with column data</summary>
+/// <param>"JSONComposeOptions" the TZJSONComposeOptions used for composing
+///  the JSON contents</param>
+procedure TZDbcProxyResultSet.ColumnsToJSON(ResultsWriter: {$IFDEF MORMOT2}TResultsWriter{$ELSE}TJSONWriter{$ENDIF}; JSONComposeOptions: TZJSONComposeOptions);
+begin
+   // Todo: Implement
+end;
+{$ENDIF WITH_COLUMNS_TO_JSON}
+
 
 {$ENDIF ENABLE_PROXY} //if set we have an empty unit
 end.
