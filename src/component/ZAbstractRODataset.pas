@@ -305,6 +305,7 @@ type
     FLastRowFetched: Boolean;
     FTryKeepDataOnDisconnect: Boolean;
     FCursorLocation: TZCursorLocation;
+    FSortNullsFirst: Boolean;
     procedure CheckOpened;
     procedure CheckConnected; virtual;
     procedure CheckBiDirectional;
@@ -557,6 +558,7 @@ type
     function PSIsSQLBased: Boolean; {$IFDEF WITH_IPROVIDER}override;{$ELSE}virtual;{$ENDIF}
   protected
     procedure DataEvent(Event: TDataEvent; Info: {$IFDEF FPC}PtrInt{$ELSE}NativeInt{$ENDIF}); override;
+    procedure SetSortNullsFirst(NewValue: Boolean);
   protected //internals to identify if some options/operations are relevant or not
     function InheritsFromReadWriteTransactionUpdateObjectDataSet: Boolean; virtual;
     function InheritsFromReadWriteDataSet: Boolean; virtual;
@@ -642,6 +644,7 @@ type
     property Filter;
     property Filtered;
     property Connection: TZAbstractConnection read FConnection write SetConnection;
+    property SortNullsFirst: Boolean read FSortNullsFirst write SetSortNullsFirst default false;
   public
     function NextResultSet: Boolean; virtual;
     function NextRecordSet: Boolean;
@@ -2221,30 +2224,37 @@ begin
     SavedState := SetTempState(dsNewValue);
     CurrentRows.Add(Pointer(RowNo));
     CurrentRow := 1;
-
     try
-      OnFilterRecord(Self, Result);
-    except
-      if Assigned(ApplicationHandleException)
-      then ApplicationHandleException(Self);
+      try
+        OnFilterRecord(Self, Result);
+      except
+        if Assigned(ApplicationHandleException)
+        then ApplicationHandleException(Self);
+      end;
+    finally
+      CurrentRow := SavedRow;
+      {$IFDEF AUTOREFCOUNT}
+      CurrentRows := nil;
+      {$ELSE}
+      CurrentRows.Free;
+      {$ENDIF}
+      CurrentRows := SavedRows;
+      RestoreState(SavedState);
     end;
-
-    CurrentRow := SavedRow;
-    {$IFDEF AUTOREFCOUNT}
-    CurrentRows := nil;
-    {$ELSE}
-    CurrentRows.Free;
-    {$ENDIF}
-    CurrentRows := SavedRows;
-    RestoreState(SavedState);
-
   end;
   if not Result then
      Exit;
 
   { Check the record by filter expression. }
-  if FilterEnabled and (FilterExpression.Expression <> '') then
-    Result := InternalFilterRow;
+  if FilterEnabled and (FilterExpression.Expression <> '') then begin
+    SavedState := SetTempState(dsFilter);
+    try
+      GetCalcFields(TGetCalcFieldsParamType(TempBuffer));
+      Result := InternalFilterRow;
+    finally
+      RestoreState(SavedState);
+    end;
+  end;
 end;
 {$IFDEF FPC} {$POP} {$ENDIF}
 
@@ -2660,6 +2670,7 @@ begin
           end;
         end;
       end;
+    dsFilter: RowBuffer := PZRowBuffer(TempBuffer);//PZRowBuffer(ActiveBuffer);
     {$IFDEF FPC}else; {$ENDIF}
   end;
   Result := RowBuffer <> nil;
@@ -5595,7 +5606,7 @@ begin
 
   { Compare both records. }
   Result := FFieldsAccessor.CompareBuffers(FSortRowBuffer1, FSortRowBuffer2,
-    FSortedFieldIndices, FCompareFuncs);
+    FSortedFieldIndices, FCompareFuncs, FSortNullsFirst);
 end;
 {$IFDEF FPC} {$POP} {$ENDIF}
 
@@ -5612,7 +5623,7 @@ end;
 function TZAbstractRODataset.LowLevelSort(Item1, Item2: Pointer): Integer;
 begin
   Result := ResultSet.CompareRows(NativeInt(Item1), NativeInt(Item2),
-    FSortedFieldIndices, FCompareFuncs);
+    FSortedFieldIndices, FCompareFuncs, FSortNullsFirst);
 end;
 {$IFDEF FPC} {$POP} {$ENDIF}
 
@@ -6086,6 +6097,17 @@ begin
 end;
 
 {====================end of bangfauzan addition====================}
+
+procedure TZAbstractRODataset.SetSortNullsFirst(NewValue: Boolean);
+begin
+  if NewValue xor FSortNullsFirst then begin
+    FSortNullsFirst := NewValue;
+    // basically copied from StSortedFields
+    if Active and (FSortedFields <> '')then
+      InternalSort;
+  end;
+end;
+
 
 { TZInt64Field }
 
@@ -9450,7 +9472,7 @@ var P: PAnsiChar;
   end;
   procedure DoValidate;
   begin
-    SetLength(FValidateBuffer, {$IFDEF NATIVEINT_WEAK_REFERENCE}ZCompatibility.{$ENDIF}Max(L, FBufferSize){$IFDEF WITH_TVALUEBUFFER}+1{$ENDIF});
+    SetLength(FValidateBuffer, {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Max(L, FBufferSize){$IFDEF WITH_TVALUEBUFFER}+1{$ENDIF});
     if L > 0 then
       Move(P^, Pointer(FValidateBuffer)^, L);
     P := Pointer(FValidateBuffer);
