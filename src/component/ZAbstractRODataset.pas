@@ -210,6 +210,7 @@ type
 
     FIndexFields: {$IFDEF WITH_GENERIC_TLISTTFIELD}TList<TField>{$ELSE}TList{$ENDIF};
     FLobCacheMode: TLobCacheMode;
+    FLastState: TDataSetState;
     FSortType : TSortType;
     FHasOutParams: Boolean;
     FSortedFields: string;
@@ -217,7 +218,7 @@ type
     FSortedFieldIndices: TIntegerDynArray;
     FSortedComparsionKinds: TComparisonKindArray;
     FSortedOnlyDataFields: Boolean;
-    FCompareFuncs: TCompareFuncs;
+    FCompareFuncs: TZCompareFuncs;
     FSortRowBuffer1: PZRowBuffer;
     FSortRowBuffer2: PZRowBuffer;
     FPrepared: Boolean;
@@ -1103,6 +1104,9 @@ type
     FBound, FIsValidating: Boolean;
     function FilledValueWasNull(var Value: TBCD): Boolean;
     function IsRowDataAvailable: Boolean;
+    {$IFNDEF TFIELD_HAS_ASLARGEINT}
+    function GetAsLargeInt: LargeInt;
+    {$ENDIF}
   protected
     function GetIsNull: Boolean; override;
     function GetAsCurrency: Currency; override;
@@ -1118,6 +1122,7 @@ type
     procedure Bind(Binding: Boolean); {$IFDEF WITH_VIRTUAL_TFIELD_BIND}override;{$ENDIF}
   public
     procedure Clear; override;
+    {$IFNDEF TFIELD_HAS_ASLARGEINT}property AsLargeInt: LargeInt read GetAsLargeInt write SetAsLargeInt;{$ENDIF}
   end;
 
   TZGuidField = class(TGuidField)
@@ -2246,7 +2251,8 @@ begin
      Exit;
 
   { Check the record by filter expression. }
-  if FilterEnabled and (FilterExpression.Expression <> '') then begin
+  if FilterEnabled and (FilterExpression.Expression <> '') and
+     (State <> dsInactive){TempBuffer not available!} then begin
     SavedState := SetTempState(dsFilter);
     try
       GetCalcFields(TGetCalcFieldsParamType(TempBuffer));
@@ -3777,7 +3783,7 @@ begin
   end;
 end;
 
-type TProtectedPropField = class(TField);
+//type TProtectedPropField = class(TField);
 procedure TZAbstractRODataset.InternalOpen;
 var
   ColumnList: TObjectList;
@@ -4455,10 +4461,20 @@ begin
   GotoRow(PZRowBuffer(Buffer)^.Index);
 end;
 
+function HasFilterExpression(DS: TZAbstractRODataset): Boolean; //suppress the _xStrClear
+begin
+  Result := (DS.FilterExpression.Expression <> '');
+end;
+
 procedure TZAbstractRODataset.DataEvent(Event: TDataEvent; Info: {$IFDEF FPC}PtrInt{$ELSE}NativeInt{$ENDIF});
 var I, j: Integer;
+  SavedLastState: TDataSetState;
 begin
+  SavedLastState := FLastState;
+  FLastState := State;
   inherited DataEvent(Event, Info);
+  if (SavedLastState = dsInactive) and (State = dsBrowse) and FilterEnabled and HasFilterExpression(Self) then
+    ReReadRows;
   if Event = deLayoutChange then
     for i := 0 to Fields.Count -1 do
       for j := 0 to high(FieldsLookupTable) do
@@ -8863,6 +8879,16 @@ begin
     U := 0;
 end;
 {$IFDEF FPC} {$POP} {$ENDIF}
+
+{$IFNDEF TFIELD_HAS_ASLARGEINT}
+function TZFMTBCDField.GetAsLargeInt: LargeInt;
+var aValue: TBCD;
+begin
+  if FilledValueWasNull(aValue)
+  then Result := 0
+  else Result := ZSysUtils.BCD2Int64(aValue);
+end;
+{$ENDIF}
 
 function TZFMTBCDField.GetAsCurrency: Currency;
 begin
