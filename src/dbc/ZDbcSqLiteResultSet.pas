@@ -411,7 +411,7 @@ begin
                                   ResultsWriter.AddShort('ISODate("0000-00-00')
                                 else if jcoDATETIME_MAGIC in JSONComposeOptions then
                                   {$IFDEF MORMOT2}
-                                  ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                                  ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                                   {$ELSE}
                                   ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                                   {$ENDIF}
@@ -426,7 +426,7 @@ begin
                                   ResultsWriter.AddShort('ISODate("')
                                 else if jcoDATETIME_MAGIC in JSONComposeOptions then
                                   {$IFDEF MORMOT2}
-                                  ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                                  ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                                   {$ELSE}
                                   ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                                   {$ENDIF}
@@ -441,7 +441,7 @@ begin
                                   ResultsWriter.AddShort('ISODate("')
                                 else if jcoDATETIME_MAGIC in JSONComposeOptions then
                                   {$IFDEF MORMOT2}
-                                  ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                                  ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                                   {$ELSE}
                                   ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                                   {$ENDIF}
@@ -464,7 +464,7 @@ begin
                     ResultsWriter.AddShort('ISODate("0000-00-00')
                   else if jcoDATETIME_MAGIC in JSONComposeOptions then
                     {$IFDEF MORMOT2}
-                    ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                    ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                     {$ELSE}
                     ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                     {$ENDIF}
@@ -480,7 +480,7 @@ begin
                     ResultsWriter.AddShort('ISODate("')
                   else if jcoDATETIME_MAGIC in JSONComposeOptions then
                     {$IFDEF MORMOT2}
-                    ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                    ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                     {$ELSE}
                     ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                     {$ENDIF}
@@ -496,7 +496,7 @@ begin
                     ResultsWriter.AddShort('ISODate("')
                   else if jcoDATETIME_MAGIC in JSONComposeOptions then
                     {$IFDEF MORMOT2}
-                    ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                    ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                     {$ELSE}
                     ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                     {$ENDIF}

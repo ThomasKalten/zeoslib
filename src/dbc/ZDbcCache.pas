@@ -1621,7 +1621,7 @@ begin
         stSmall         : ResultsWriter.Add(PSmallInt(Data)^);
         stLongWord      : ResultsWriter.AddU(PCardinal(Data)^);
         stInteger       : ResultsWriter.Add(PInteger(Data)^);
-        stULong         : ResultsWriter.AddNoJSONEscapeUTF8(ZFastCode.IntToRaw(PUInt64(Data)^));
+//        stULong         : ResultsWriter.AddNoJSONEscapeUTF8(ZFastCode.IntToRaw(PUInt64(Data)^));
         stLong          : ResultsWriter.Add(PInt64(Data)^);
         stFloat         : ResultsWriter.AddSingle(PSingle(Data)^);
         stDouble        : ResultsWriter.AddDouble(PDouble(Data)^);
@@ -1664,7 +1664,7 @@ begin
                               ResultsWriter.AddShort('ISODate("0000-00-00')
                             else if jcoDATETIME_MAGIC in JSONComposeOptions then begin
                               {$IFDEF MORMOT2}
-                              ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                              ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                               {$ELSE}
                               ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                               {$ENDIF}
@@ -1683,7 +1683,7 @@ begin
                               ResultsWriter.AddShort('ISODate("')
                             else if jcoDATETIME_MAGIC in JSONComposeOptions then
                               {$IFDEF MORMOT2}
-                              ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                              ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                               {$ELSE}
                               ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                               {$ENDIF}
@@ -1703,7 +1703,7 @@ begin
                               ResultsWriter.AddShort('ISODate("')
                             else if jcoDATETIME_MAGIC in JSONComposeOptions then
                               {$IFDEF MORMOT2}
-                              ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                              ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                               {$ELSE}
                               ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                               {$ENDIF}

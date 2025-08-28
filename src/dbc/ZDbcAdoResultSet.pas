@@ -263,7 +263,7 @@ begin
                               end else begin
                                 if jcoDATETIME_MAGIC in JSONComposeOptions
                                 {$IFDEF MORMOT2}
-                                then ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                                then ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                                 {$ELSE}
                                 then ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                                 {$ENDIF}
@@ -280,7 +280,7 @@ begin
                               end else begin
                                 if jcoDATETIME_MAGIC in JSONComposeOptions
                                 {$IFDEF MORMOT2}
-                                then ResultsWriter.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
+                                then ResultsWriter.AddShort(JSON_SQLDATE_MAGIC_QUOTE_C, 4)
                                 {$ELSE}
                                 then ResultsWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                                 {$ENDIF}
