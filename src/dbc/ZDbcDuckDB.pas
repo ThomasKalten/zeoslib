@@ -1,7 +1,7 @@
 {*********************************************************}
 {                                                         }
 {                 Zeos Database Objects                   }
-{           DBC Layer Proxy Connectivity Classes          }
+{              DuckDB Connectivity Classes                }
 {                                                         }
 {        Originally written by Jan Baumgarten             }
 {                                                         }
@@ -49,22 +49,22 @@
 {                                 Zeos Development Group. }
 {********************************************************@}
 
-unit ZDbcProxy;
+unit ZDbcDuckDB;
 
 interface
 
 {$I ZDbc.inc}
 
-{$IFDEF ENABLE_PROXY} //if set we have an empty unit
+{$IFNDEF ZEOS_DISABLE_DUCKDB} //if set we have an empty unit
 uses
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
-  ZDbcIntfs, ZDbcConnection, ZPlainProxyDriver, ZPlainProxyDriverIntf,
+  ZDbcIntfs, ZDbcConnection, ZPlainDuckDb,
   ZDbcLogging, ZTokenizer, ZGenericSqlAnalyser, {$IFNDEF ZEOS73UP}ZURL,{$ENDIF} ZCompatibility;
 
 type
 
-  {** Implements DBC Proxy Driver. }
-  TZDbcProxyDriver = class(TZAbstractDriver)
+  {** Implements DBC DuckDb Driver. }
+  TZDbcDuckDBDriver = class(TZAbstractDriver)
   public
     constructor Create; override;
     function Connect(const Url: TZURL): IZConnection; override;
@@ -75,39 +75,30 @@ type
     function GetStatementAnalyser: IZStatementAnalyser; override;
   end;
 
-  {** Represents a DBC Proxy specific connection interface. }
-  IZDbcProxyConnection = interface (IZConnection)
-    ['{C6ACB283-1126-426B-9637-B4CFD430BB33}']
-    function GetPlainDriver: IZProxyPlainDriver;
-    function GetConnectionInterface: IZDbcProxy;
-    function GetDbInfoStr: ZWideString;
-    function GetPublicKeys: ZWideString;
+  {** Represents a DBC DuckDb specific connection interface. }
+  IZDbcDuckDBConnection = interface (IZConnection)
+    ['{ABA70EDA-E0E4-4886-8FA5-53D3A8D4607B}']
+    function GetPlainDriver: TZDuckDBPlainDriver;
+    function GetConnectionHandle: TDuckDB_Connection;
+    procedure CheckDuckDbError(AResult: PDuckDB_Result);
   end;
 
-  {** Implements DBC Proxy Database Connection. }
+  {** Implements DBC DuckDb Database Connection. }
 
-  { TZProxyConnection }
+  { TZDuckDBConnection }
 
-  TZDbcProxyConnection = class({$IFNDEF ZEOS73UP}TZAbstractConnection{$ELSE}TZAbstractSingleTxnConnection{$ENDIF},
-    IZConnection, IZTransaction, IZDbcProxyConnection)
+  TZDbcDuckDBConnection = class({$IFNDEF ZEOS73UP}TZAbstractConnection{$ELSE}TZAbstractSingleTxnConnection{$ENDIF},
+    IZConnection, IZTransaction, IZDbcDuckDBConnection)
   private
-    FPlainDriver: IZProxyPlainDriver;
-    FConnIntf: IZDbcProxy;
-    FDbInfo: ZWideString;
-
-    //shadow properties - they just mirror the values that are set on the server
-    FCatalog: String;
-    FServerProvider: TZServerProvider;
+    FPlainDriver: TZDuckDBPlainDriver;
+    FDatabase: TDuckDB_Database;
+    FConnection: TDuckDB_Connection;
+    FSchema: string;
   protected
-    procedure transferProperties(PropName, PropValue: String);
-    procedure applyProperties(const Properties: String);
-    function encodeProperties(PropName, PropValue: String): String;
+    procedure CheckDuckDBError(Res: TDuckDB_State; AMessage: String); overload;
+    procedure CheckDuckDbError(AResult: PDuckDB_Result); overload;
   public
     procedure AfterConstruction; override;
-    {$IFNDEF ZEOS73UP}
-    function CreateRegularStatement(Info: TStrings): IZStatement; override;
-    function CreatePreparedStatement(const SQL: string; Info: TStrings): IZPreparedStatement; override;
-    {$ELSE}
     /// <summary>Creates a <c>Statement</c> interface for sending SQL statements
     ///  to the database. SQL statements without parameters are normally
     ///  executed using Statement objects. If the same SQL statement
@@ -156,7 +147,6 @@ type
     /// <returns> a new IZCallableStatement interface containing the
     ///  pre-compiled SQL statement </returns>
     function PrepareCallWithParams(const SQL: string; Info: TStrings): IZCallableStatement;
-    {$ENDIF}
     /// <summary>If the current transaction is saved the current savepoint get's
     ///  released. Otherwise makes all changes made since the previous commit/
     ///  rollback permanent and releases any database locks currently held by
@@ -169,7 +159,6 @@ type
     ///  Connection. This method should be used only when auto-commit has been
     ///  disabled. See setAutoCommit.</summary>
     procedure Rollback;
-    {$IFDEF ZEOS73UP}
     /// <summary>Starts transaction support or saves the current transaction.
     ///  If the connection is closed, the connection will be opened.
     ///  If a transaction is underway a nested transaction or a savepoint will
@@ -182,7 +171,6 @@ type
     ///  savepoint got saved too and so on.</returns>
     function StartTransaction: Integer;
     function GetTransactionLevel: Integer; override;
-    {$ENDIF}
 
     procedure Open; override;
     procedure InternalClose; override;
@@ -205,13 +193,11 @@ type
     ///  values. See DatabaseInfo.SupportsTransactionIsolationLevel</param>
     procedure SetTransactionIsolation(Level: TZTransactIsolationLevel); override;
     procedure SetUseMetadata(Value: Boolean); override;
-    // AutoEncodeStrings is not supported
 
     function GetClientVersion: Integer; override;
     function GetHostVersion: Integer; override;
 
-    function GetPlainDriver: IZProxyPlainDriver;
-    function GetConnectionInterface: IZDbcProxy;
+    function GetPlainDriver: TZDuckDBPlainDriver;
 
     function GetServerProvider: TZServerProvider; override;
     /// <summary>Creates a generic tokenizer interface.</summary>
@@ -220,31 +206,24 @@ type
     /// <summary>Creates a generic statement analyser object.</summary>
     /// <returns>a created generic tokenizer object as interface.</returns>
     function GetStatementAnalyser: IZStatementAnalyser;
-    function GetDbInfoStr: ZWideString;
 
     procedure ExecuteImmediat(const SQL: UnicodeString; LoggingCategory: TZLoggingCategory); override;
 
-    /// <summary>
-    ///   Gets the public keys from a dbc proxy server in TOFU mode.
-    /// </summary>
-    function GetPublicKeys: ZWideString;
+    function GetConnectionHandle: TDuckDB_Connection;
   end;
 
 var
   {** The common driver manager object. }
-  ProxyDriver: IZDriver;
+  DuckDBDriver: IZDriver;
 
-{$ENDIF ENABLE_PROXY} //if set we have an empty unit
+{$ENDIF ZEOS_DISABLE_DUCKDB} //if set we have an empty unit
 implementation
-{$IFDEF ENABLE_PROXY} //if set we have an empty unit
+{$IFNDEF ZEOS_DISABLE_DUCKDB} //if set we have an empty unit
 
 uses
-  ZSysUtils, ZFastCode, ZEncoding,
-  ZDbcProxyMetadata, ZDbcProxyStatement, ZDbcProperties,
-  ZPostgreSqlAnalyser, ZPostgreSqlToken, ZSybaseAnalyser, ZSybaseToken,
-  ZInterbaseAnalyser, ZInterbaseToken, ZMySqlAnalyser, ZMySqlToken,
-  ZOracleAnalyser, ZOracleToken, ZGenericSqlToken,
-  ZMessages, Typinfo, ZExceptions
+  ZSysUtils, ZFastCode, ZEncoding, ZDbcMetadata,
+  ZDbcDuckDBMetadata, ZDbcDuckDBStatement, ZDbcProperties,
+  ZGenericSqlToken, ZMessages, Typinfo, ZExceptions
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 const
@@ -253,17 +232,16 @@ const
   TransactionIsolationStr = 'transactionisolation';
   UseMetadataStr = 'usemetadata';
   ServerProviderStr = 'serverprovider';
-//  AutoEncodeStr = 'autoencodestrings';
 
-{ TZDbcProxyDriver }
+{ TZDbcDuckDBDriver }
 
 {**
   Constructs this object with default properties.
 }
-constructor TZDbcProxyDriver.Create;
+constructor TZDbcDuckDBDriver.Create;
 begin
   inherited Create;
-  AddSupportedProtocol(AddPlainDriverToCache(TZProxyBaseDriver.Create));
+  AddSupportedProtocol(AddPlainDriverToCache(TZDuckDBPlainDriver.Create));
 end;
 
 {**
@@ -289,16 +267,16 @@ end;
   @return a <code>Connection</code> object that represents a
     connection to the URL
 }
-function TZDbcProxyDriver.Connect(const Url: TZURL): IZConnection;
+function TZDbcDuckDBDriver.Connect(const Url: TZURL): IZConnection;
 begin
-  Result := TZDbcProxyConnection.Create(Url) as IZConnection;
+  Result := TZDbcDuckDBConnection.Create(Url) as IZConnection;
 end;
 
 {**
   Gets the driver's major version number. Initially this should be 1.
   @return this driver's major version number
 }
-function TZDbcProxyDriver.GetMajorVersion: Integer;
+function TZDbcDuckDBDriver.GetMajorVersion: Integer;
 begin
   Result := 0;
 end;
@@ -307,7 +285,7 @@ end;
   Gets the driver's minor version number. Initially this should be 0.
   @return this driver's minor version number
 }
-function TZDbcProxyDriver.GetMinorVersion: Integer;
+function TZDbcDuckDBDriver.GetMinorVersion: Integer;
 begin
   Result := 1;
 end;
@@ -316,10 +294,8 @@ end;
   Gets a SQL syntax tokenizer.
   @returns a SQL syntax tokenizer object.
 }
-function TZDbcProxyDriver.GetTokenizer: IZTokenizer;
+function TZDbcDuckDBDriver.GetTokenizer: IZTokenizer;
 begin
-  // todo: return a tokenizer that matches the underlying database -> do we really need to do that?
-  // note: this can't work - we don't know which provider will be in use.
   Result := TZTokenizer.Create; { thread save! Allways return a new Tokenizer! }
 end;
 
@@ -327,205 +303,135 @@ end;
   Creates a statement analyser object.
   @returns a statement analyser object.
 }
-function TZDbcProxyDriver.GetStatementAnalyser: IZStatementAnalyser;
+function TZDbcDuckDBDriver.GetStatementAnalyser: IZStatementAnalyser;
 begin
-  // todo: return an analyzer that matches the underlying database -> do we really need to do that?
-  // note: this can't work - we don't know which provider will be in use.
   Result := TZGenericStatementAnalyser.Create; { thread save! Allways return a new Analyser! }
 end;
 
-{ TZDbcProxyConnection }
+{ TZDbcDuckDbConnection }
+
+procedure TZDbcDuckDBConnection.CheckDuckDBError(Res: TDuckDB_State; AMessage: String);
+begin
+  if Res <> DuckDBSuccess then
+    raise EZSQLException.Create(AMessage);
+end;
+
+procedure TZDbcDuckDBConnection.CheckDuckDBError(AResult: PDuckDB_Result);
+var
+  ErrorMsg: UTF8String;
+begin
+  ErrorMsg := FPlainDriver.DuckDB_Result_Error(AResult);
+  raise EZSQLException.Create({$IFDEF UNICODE}UTF8Decode(ErrorMsg){$ELSE}ErrorMsg{$ENDIF});
+end;
 
 {**
   Constructs this object and assignes the main properties.
 }
-procedure TZDbcProxyConnection.AfterConstruction;
+procedure TZDbcDuckDBConnection.AfterConstruction;
 begin
-  FTransactionLevel := 0;
-  FMetadata := TZProxyDatabaseMetadata.Create(Self, Url);
-  FConnIntf := GetPlainDriver.GetLibraryInterface;
-  if not assigned(FConnIntf) then
-    raise EZSQLException.Create(String(GetPlainDriver.GetLastErrorStr));
+  FPlainDriver := PlainDriver.GetInstance as TZDuckDBPlainDriver;
+  FMetadata := TZDuckDBDatabaseMetadata.Create(Self, Url);
   inherited AfterConstruction;
 end;
 
 {**
   Opens a connection to database server with specified parameters.
 }
-procedure TZDbcProxyConnection.Open;
+procedure TZDbcDuckDBConnection.Open;
 var
   LogMessage: String;
-  PropList: WideString;
-  MyDbInfo: WideString;
-  WsUrl: String; // Webservice URL
-  TofuPubKeys: String;
+  DatabasePath: {$IFDEF UNICODE}UTF8String{$ELSE}String{$ENDIF};
+  Res: TDuckDB_State;
 begin
   if not Closed then
     Exit;
 
-  WsUrl := URL.Properties.Values[ConnProps_ProxyProtocol];
-  if WsUrl = '' then
-    WsUrl := 'https';
-  WsUrl := WsUrl + '://' + HostName;
-  if Port <> 0 then
-    WsUrl := WsUrl + ':' + ZFastCode.IntToStr(Port);
-  WsUrl := WsUrl + '/services/IZeosProxy';
-
   LogMessage := 'CONNECT TO "'+ URL.Database + '" AS USER "' + URL.UserName + '"';
-
-  PropList := WideString(encodeProperties('autocommit', BoolToStr(GetAutoCommit, True)));
-
-  if URL.Properties.IndexOfName(ConnProps_TofuPubKeys) >= 0 then begin
-    TofuPubKeys := URL.Properties.Values[ConnProps_TofuPubKeys];
-    PropList := PropList + LineEnding + 'TofuPubKeys=' + TofuPubKeys;
-  end;
-
-  FConnIntf.Connect(WideString(User), WideString(Password), WideString(WsUrl), WideString(Database), PropList, MyDbInfo);
+  DatabasePath := {$IFDEF UNICODE}UTF8Encode(URL.Database){$ELSE}URL.Database{$ENDIF};
+  Res := FPlainDriver.DuckDB_Open(PAnsiChar(DatabasePath), @FDatabase);
+  CheckDuckDBError(Res, Format('Could not open DuckDB Database %s.', [URL.Database]));
+  Res := FPlainDriver.Duckdb_Connect(FDatabase, @FConnection);
+  CheckDuckDBError(Res, Format('Could not connect to DuckDB Database %s.', [URL.Database]));
 
   DriverManager.LogMessage(lcConnect, URL.Protocol , LogMessage);
-  FDbInfo := MyDbInfo;
   inherited Open;
-  applyProperties(String(PropList));
   New(ConSettings.ClientCodePage);
-  ConSettings.ClientCodePage.Name := 'UTF16';
-  ConSettings.ClientCodePage.Encoding := ceUTF16;
-  ConSettings.ClientCodePage.CharWidth := 2;
-  ConSettings.ClientCodePage.CP := zCP_UTF16;
+  ConSettings.ClientCodePage.Name := 'UTF8';
+  ConSettings.ClientCodePage.Encoding := ceUTF8;
+  ConSettings.ClientCodePage.CharWidth := 4;
+  ConSettings.ClientCodePage.CP := zCP_UTF8;
+
+  if FSchema <> '' then begin
+    LogMessage := FSchema;
+    SetCatalog(LogMessage);
+  end;
 end;
 
-{$IFNDEF ZEOS73UP}
-{**
-  Creates a <code>Statement</code> object for sending
-  SQL statements to the database.
-  SQL statements without parameters are normally
-  executed using Statement objects. If the same SQL statement
-  is executed many times, it is more efficient to use a
-  <code>PreparedStatement</code> object.
-  <P>
-  Result sets created using the returned <code>Statement</code>
-  object will by default have forward-only type and read-only concurrency.
-
-  @param Info a statement parameters.
-  @return a new Statement object
-}
-function TZDbcProxyConnection.CreateRegularStatement(Info: TStrings):
-  IZStatement;
+function TZDbcDuckDBConnection.CreateStatementWithParams(Info: TStrings): IZStatement;
 begin
   if IsClosed then
     Open;
 
-  Result := TZDbcProxyPreparedStatement.Create((self as IZConnection), '', Info);
+  Result := TZDbcDuckDBPreparedStatement.Create((self as IZConnection), '', Info);
 end;
 
-{$ELSE}
-
-function TZDbcProxyConnection.CreateStatementWithParams(Info: TStrings): IZStatement;
+function TZDbcDuckDBConnection.PrepareStatementWithParams(const SQL: string; Info: TStrings): IZPreparedStatement;
 begin
   if IsClosed then
     Open;
 
-  Result := TZDbcProxyPreparedStatement.Create((self as IZConnection), '', Info);
+  Result := TZDbcDuckDBPreparedStatement.Create((self as IZConnection), SQL, Info);
 end;
 
-{$ENDIF}
-
-{$IFNDEF ZEOS73UP}
-
-{**
-  Creates a <code>PreparedStatement</code> object for sending
-  parameterized SQL statements to the database.
-
-  A SQL statement with or without IN parameters can be
-  pre-compiled and stored in a PreparedStatement object. This
-  object can then be used to efficiently execute this statement
-  multiple times.
-
-  <P><B>Note:</B> This method is optimized for handling
-  parametric SQL statements that benefit from precompilation. If
-  the driver supports precompilation,
-  the method <code>prepareStatement</code> will send
-  the statement to the database for precompilation. Some drivers
-  may not support precompilation. In this case, the statement may
-  not be sent to the database until the <code>PreparedStatement</code> is
-  executed.  This has no direct effect on users; however, it does
-  affect which method throws certain SQLExceptions.
-
-  Result sets created using the returned PreparedStatement will have
-  forward-only type and read-only concurrency, by default.
-
-  @param sql a SQL statement that may contain one or more '?' IN
-    parameter placeholders
-  @param Info a statement parameters.
-  @return a new PreparedStatement object containing the
-    pre-compiled statement
-}
-function TZDbcProxyConnection.CreatePreparedStatement(const SQL: string;
-  Info: TStrings): IZPreparedStatement;
-begin
-  if IsClosed then
-    Open;
-
-  Result := TZDbcProxyPreparedStatement.Create((self as IZConnection), SQL, Info);
-end;
-
-{$ELSE}
-
-function TZDbcProxyConnection.PrepareStatementWithParams(const SQL: string; Info: TStrings): IZPreparedStatement;
-begin
-  if IsClosed then
-    Open;
-
-  Result := TZDbcProxyPreparedStatement.Create((self as IZConnection), SQL, Info);
-end;
-
-{$ENDIF}
-
-{$IFDEF ZEOS73UP}
-function TZDbcProxyConnection.PrepareCallWithParams(const SQL: string; Info: TStrings): IZCallableStatement;
+function TZDbcDuckDBConnection.PrepareCallWithParams(const SQL: string; Info: TStrings): IZCallableStatement;
 begin
   {$IFDEF FPC}
   Result := nil;
   {$ENDIF}
   raise EZSQLException.Create('PrepareCallWithParams is not supported!');
 end;
-{$ENDIF}
 
-procedure TZDbcProxyConnection.Commit;
+procedure TZDbcDuckDBConnection.Commit;
 begin
-  if not Closed then
-    if not GetAutoCommit then begin
-      FConnIntf.Commit;
-      Dec(FTransactionLevel);
-      AutoCommit := FTransactionLevel = 0;
-    end else
-      raise EZSQLException.Create(SInvalidOpInAutoCommit);
+  // raise Exception.Create('Transactions are not supported yet.');
+  if Closed then
+    raise EZSQLException.Create(SConnectionIsNotOpened);
+  if AutoCommit then
+    raise EZSQLException.Create(SCannotUseCommit);
+  ExecuteImmediat('COMMIT', lcTransaction);
+  AutoCommit := not FRestartTransaction;
 end;
 
-procedure TZDbcProxyConnection.Rollback;
+procedure TZDbcDuckDBConnection.Rollback;
 begin
-  if not Closed then
-    if not GetAutoCommit then begin
-      FConnIntf.Rollback;
-      Dec(FTransactionLevel);
-      AutoCommit := FTransactionLevel = 0;
-    end else
-      raise EZSQLException.Create(SInvalidOpInAutoCommit);
+  // raise Exception.Create('Transactions are not supported yet.');
+  if Closed then
+    raise EZSQLException.Create(SConnectionIsNotOpened);
+  if AutoCommit then
+    raise EZSQLException.Create(SCannotUseRollback);
+  ExecuteImmediat('ROLLBACK', lcTransaction);
+  AutoCommit := not FRestartTransaction;
 end;
 
-{$IFDEF ZEOS73UP}
-function TZDbcProxyConnection.StartTransaction: Integer;
+function TZDbcDuckDBConnection.StartTransaction: Integer;
 begin
-  Result := FConnIntf.StartTransaction;
-  AutoCommit := False;
-  FTransactionLevel := Result;
+  // raise Exception.Create('Transactions are not supported yet.');
+  if Closed then
+    Open;
+  if AutoCommit then begin
+    // Docs say to use "begin transaction" but note that "start transaction" also seems to work.
+    ExecuteImmediat('BEGIN TRANSACTION', lcTransaction);
+    AutoCommit := False;
+    Result := 1;
+  end
+  else
+    raise EZSQLException.Create('DuckDB does not support savepoints or nested transactions.');
 end;
 
-function TZDbcProxyConnection.GetTransactionLevel: Integer;
+function TZDbcDuckDBConnection.GetTransactionLevel: Integer;
 begin
-  Result := FTransactionLevel;
+  Result := 0;
 end;
-
-{$ENDIF}
 
 {**
   Releases a Connection's database and JDBC resources
@@ -536,22 +442,26 @@ end;
   garbage collected. Certain fatal errors also result in a closed
   Connection.
 }
-procedure TZDbcProxyConnection.InternalClose;
+procedure TZDbcDuckDBConnection.InternalClose;
 var
   LogMessage: String;
 begin
-  if ( Closed ) or (not Assigned(PlainDriver)) then
-    Exit;
+  //if ( Closed ) or (not Assigned(PlainDriver)) then
+  //  Exit;
   LogMessage := 'DISCONNECT FROM "' + URL.Database + '"';
 
-  FConnIntf.Disconnect;
+  if Assigned(FConnection) then
+    FPlainDriver.DuckDB_Disconnect(@FConnection);
+  if Assigned(FDatabase) then
+    FPlainDriver.DuckDB_Close(@FDatabase);
 
   if Assigned(DriverManager) and DriverManager.HasLoggingListener then //thread save
     DriverManager.LogMessage(lcDisconnect, URL.Protocol, LogMessage);
   Dispose(ConSettings.ClientCodePage);
+  inherited;
 end;
 
-function TZDbcProxyConnection.GetClientVersion: Integer;
+function TZDbcDuckDBConnection.GetClientVersion: Integer;
 begin
   Result := 1000;
 end;
@@ -560,8 +470,11 @@ end;
   Sets a new selected catalog name.
   @param Catalog a selected catalog name.
 }
-procedure TZDbcProxyConnection.SetAutoCommit(Value: Boolean);
+procedure TZDbcDuckDBConnection.SetAutoCommit(Value: Boolean);
 begin
+  if not Value then
+    raise Exception.Create('Leaving AutoCommit mode is not supported yet.');
+  {
   if Value <> GetAutoCommit then begin
     if not Closed then
       FConnIntf.SetAutoCommit(Value);
@@ -571,203 +484,103 @@ begin
         FTransactionLevel := 1;
     inherited;
   end;
+  }
 end;
 
 {**
   Gets a SQLite plain driver interface.
   @return a SQLite plain driver interface.
 }
-function TZDbcProxyConnection.GetPlainDriver: IZProxyPlainDriver;
+function TZDbcDuckDBConnection.GetPlainDriver: TZDuckDBPlainDriver;
 begin
   if not Assigned(PlainDriver) then
     raise EZSQLException.Create('The f*****g plain driver is not assigned.');
-  if fPlainDriver = nil then
-    fPlainDriver := PlainDriver as IZProxyPlainDriver;
-  Result := fPlainDriver;
+  if FPlainDriver = nil then
+    FPlainDriver := PlainDriver as TZDuckDBPlainDriver;
+  Result := FPlainDriver;
 end;
 
-function TZDbcProxyConnection.GetConnectionInterface: IZDbcProxy;
-begin
-  Result := FConnIntf;
-end;
-
-function TZDbcProxyConnection.GetHostVersion: Integer;
+function TZDbcDuckDBConnection.GetHostVersion: Integer;
 begin
   Result := 0;
 end;
 
-procedure TZDbcProxyConnection.applyProperties(const Properties: String);
-var
-  List: TStringList;
-  TempStr: String;
-  TransactionIsolation: TZTransactIsolationLevel;
+function TZDbcDuckDBConnection.GetServerProvider: TZServerProvider;
 begin
-  List := TStringList.Create;
+  Result := spDuckDB;
+end;
+
+function TZDbcDuckDBConnection.GetStatementAnalyser: IZStatementAnalyser;
+begin
+  Result := TZGenericStatementAnalyser.Create;
+end;
+
+function TZDbcDuckDBConnection.GetTokenizer: IZTokenizer;
+begin
+  Result := TZGenericSQLTokenizer.Create;
+end;
+
+procedure TZDbcDuckDBConnection.ExecuteImmediat(const SQL: UnicodeString; LoggingCategory: TZLoggingCategory);
+var
+  Res: TDuckDB_State;
+  ASql: UTF8String;
+  AResult: TDuckDB_Result;
+begin
+  if Closed then
+    Open;
+  ASql := UTF8Encode(SQL);
+  Res := FPlainDriver.DuckDB_Query(FConnection, PAnsiChar(ASql), @AResult);
   try
-    List.Text := Properties;
-    //- Set-/IsReadOnly
-    TempStr := List.Values[ReadOnlyStr];
-    if TempStr <> '' then
-      inherited SetReadOnly(StrToBool(TempStr));
-    //- Set-/GetCatalog
-    TempStr := List.Values[CatalogStr];
-    FCatalog := TempStr;
-    //- Set-/GetTransactionIsolation
-    TempStr := List.Values[TransactionIsolationStr];
-    if TempStr <> '' then begin
-      TransactionIsolation := TZTransactIsolationLevel(GetEnumValue(TypeInfo(TZTransactIsolationLevel), TempStr));
-      inherited SetTransactionIsolation(TransactionIsolation);
-    end;
-    //- (Set)UseMetaData
-    TempStr := List.Values[UseMetadataStr];
-    if TempStr <> '' then
-      inherited SetUseMetadata(StrToBool(TempStr));
-//    //- Get-/SetAutoEncodeStrings
-//    TempStr := List.Values[AutoEncodeStr];
-//    if TempStr <> '' then
-//      inherited SetAutoEncodeStrings(StrToBool(TempStr));
-    TempStr := List.Values[ServerProviderStr];
-    if TempStr <> '' then begin
-      FServerProvider := TZServerProvider(GetEnumValue(TypeInfo(TZServerProvider), TempStr));
-    end;
+    if Res <> DuckDBSuccess then
+      CheckDuckDBError(@AResult);
   finally
-    FreeAndNil(List);
+    FPlainDriver.DuckDB_Destroy_Result(@AResult);
   end;
 end;
 
-function TZDbcProxyConnection.encodeProperties(PropName, PropValue: String): String;
-var
-  List: TStringList;
-  TransactionIsolation: TZTransactIsolationLevel;
-  TempStr: String;
+procedure TZDbcDuckDBConnection.SetCatalog(const Catalog: string);
 begin
-  PropName := LowerCase(PropName);
-  List := TStringList.Create;
-  try
-    if PropName <> '' then
-      List.Values[PropName] := PropValue;
+  if Catalog <> FSchema then begin
+    FSchema := Catalog;
+    if not Closed and (FSchema <> '') then
+      ExecuteImmediat('SET SCHEMA = ''' + FSchema + '''', lcOther);
+  end;
+end;
 
-
-    if PropName <> ReadOnlyStr then
-      List.Values[ReadOnlyStr] := BoolToStr(IsReadOnly, true);
-    if PropName <> CatalogStr then
-      List.Values[CatalogStr] := GetCatalog;
-    if PropName <> TransactionIsolationStr then begin
-      TransactionIsolation := GetTransactionIsolation;
-      TempStr := GetEnumName(TypeInfo(TZTransactIsolationLevel), Ord(TransactionIsolation));
-      List.Values[TransactionIsolationStr] := TempStr;
+function TZDbcDuckDBConnection.GetCatalog: string;
+begin
+  if not Closed and (FSchema = '') then
+    with CreateStatementWithParams(nil).ExecuteQuery('select current_schema()') do
+    begin
+      if Next then
+        FSchema := GetString(FirstDBCIndex);
+      Close;
     end;
-    if PropName <> UseMetadataStr then
-      List.Values[UseMetadataStr] := BoolToStr(UseMetadata, true);
-//    if PropName <> AutoEncodeStr then
-//      List.Values[AutoEncodeStr] := BoolToStr(GetAutoEncodeStrings, true);
-    Result := List.Text;
-  finally
-    FreeAndNil(List);
-  end;
+  Result := FSchema;
 end;
 
-procedure TZDbcProxyConnection.transferProperties(PropName, PropValue: String);
-var
-  PropList: ZWideString;
+procedure TZDbcDuckDBConnection.SetTransactionIsolation(Level: TZTransactIsolationLevel);
 begin
-  if not Closed then begin
-    PropList := ZWideString(encodeProperties(PropName, PropValue));
-    PropList := FConnIntf.SetProperties(PropList);
-  end;
-  applyProperties(String(PropList));
+  //
 end;
 
-procedure TZDbcProxyConnection.SetCatalog(const Catalog: string);
+procedure TZDbcDuckDBConnection.SetUseMetadata(Value: Boolean);
 begin
-  transferProperties(CatalogStr, Catalog);
+  //
 end;
 
-function TZDbcProxyConnection.GetCatalog: string;
+function TZDbcDuckDBConnection.GetConnectionHandle: TDuckDB_Connection;
 begin
-  Result := FCatalog;
-end;
-
-procedure TZDbcProxyConnection.SetTransactionIsolation(Level: TZTransactIsolationLevel);
-var
-  TempStr: String;
-begin
-  TempStr := GetEnumName(TypeInfo(TZTransactIsolationLevel), Ord(Level));
-  transferProperties(TransactionIsolationStr, TempStr);
-end;
-
-procedure TZDbcProxyConnection.SetUseMetadata(Value: Boolean);
-var
-  TempStr: String;
-begin
-  TempStr := BoolToStr(Value, True);
-  transferProperties(UseMetadataStr, TempStr);
-end;
-
-function TZDbcProxyConnection.GetServerProvider: TZServerProvider;
-begin
-  Result := FServerProvider;
-end;
-
-function TZDbcProxyConnection.GetStatementAnalyser: IZStatementAnalyser;
-begin
-  case FServerProvider of
-    //spUnknown, spMSSQL, spMSJet,
-    spOracle: Result := TZOracleStatementAnalyser.Create;
-    spMSSQL, spASE, spASA: Result := TZSybaseStatementAnalyser.Create;
-    spPostgreSQL: Result := TZPostgreSQLStatementAnalyser.Create;
-    spIB_FB: Result := TZInterbaseStatementAnalyser.Create;
-    spMySQL: Result := TZMySQLStatementAnalyser.Create;
-    //spNexusDB, spSQLite, spDB2, spAS400,
-    //spInformix, spCUBRID, spFoxPro
-    else Result := TZGenericStatementAnalyser.Create;
-  end;
-end;
-
-function TZDbcProxyConnection.GetTokenizer: IZTokenizer;
-begin
-  case FServerProvider of
-    //spUnknown, spMSJet,
-    spOracle: Result := TZOracleTokenizer.Create;
-    spMSSQL, spASE, spASA: Result := TZSybaseTokenizer.Create;
-    spPostgreSQL: Result := TZPostgreSQLTokenizer.Create;
-    spIB_FB: Result := TZInterbaseTokenizer.Create;
-    spMySQL: Result := TZMySQLTokenizer.Create;
-    //spNexusDB, spSQLite, spDB2, spAS400,
-    //spInformix, spCUBRID, spFoxPro
-    else Result := TZGenericSQLTokenizer.Create;
-  end;
-end;
-
-function TZDbcProxyConnection.GetDbInfoStr: ZWideString;
-begin
-  Result := FDbInfo;
-end;
-
-procedure TZDbcProxyConnection.ExecuteImmediat(const SQL: UnicodeString; LoggingCategory: TZLoggingCategory);
-var
-  Statement: IZStatement;
-begin
-  Statement := CreateStatementWithParams(nil);
-  try
-    Statement.Execute(SQL);
-  finally
-    Statement.Close;
-  end;
-end;
-
-function TZDbcProxyConnection.GetPublicKeys: ZWideString;
-begin
-  Result := FConnIntf.GetPublicKeys;
+  Result := FConnection;
 end;
 
 initialization
-  ProxyDriver := TZDbcProxyDriver.Create;
-  DriverManager.RegisterDriver(ProxyDriver);
+  DuckDBDriver := TZDbcDuckDBDriver.Create;
+  DriverManager.RegisterDriver(DuckDBDriver);
 finalization
   if DriverManager <> nil then
-    DriverManager.DeregisterDriver(ProxyDriver);
-  ProxyDriver := nil;
+    DriverManager.DeregisterDriver(DuckDBDriver);
+  DuckDBDriver := nil;
 
-{$ENDIF ENABLE_PROXY} //if set we have an empty unit
+{$ENDIF ZEOS_DISABLE_DUCKDB} //if set we have an empty unit
 end.
