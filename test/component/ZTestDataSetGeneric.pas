@@ -56,7 +56,7 @@ interface
 
 uses
   Classes, DB, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, SysUtils,
-  ZDataset, ZConnection, ZDbcIntfs, ZSqlTestCase, ZCompatibility, ZVariant,
+  ZDataset, ZConnection, ZDbcIntfs, ZTokenizer, ZSqlTestCase, ZCompatibility, ZVariant,
   ZAbstractRODataset, ZMessages, ZStoredProcedure, ZMemTable, ZSqlMonitor
   {$IFNDEF DISABLE_ZPARAM}{$IFNDEF FPC}, Types{$ENDIF}, ZDbcUtils{$ENDIF};
 
@@ -70,6 +70,7 @@ type
     FQuery: TZQuery;
     FFieldList: string;
     FLogMessage: String;
+    FTokenizer: IZTokenizer;
     procedure OnTraceEvent_lcBindPrepStmt(Sender: TObject; Event: TZLoggingEvent;
       var LogTrace: Boolean);
     procedure RunDefineFields;
@@ -82,6 +83,11 @@ type
   protected
     procedure Ticket433BeforePost(DataSet: TDataSet);
   published
+    {$IFDEF FPC}
+    constructor Create; override;
+    {$ELSE}
+    constructor Create(MethodName: string); override;
+    {$ENDIF}
     procedure TestConnection;
     procedure TestReadOnlyQuery;
     procedure TestReadOnlyQueryUniDirectional;
@@ -208,9 +214,25 @@ uses
   ZEncoding, ZFastCode, ZClasses,
   ZSysUtils, ZTestConsts, ZTestCase, ZDbcProperties, ZDbcLogging,
   ZDatasetUtils, ZSqlUpdate, {$IFNDEF DISABLE_ZPARAM}ZDatasetParam,{$ENDIF}
-  ZDbcInterbaseFirebirdMetadata, ZSelectSchema;
+  ZDbcInterbaseFirebirdMetadata, ZSelectSchema, ZGenericSqlToken;
 
 { TZGenericTestDataSet }
+
+{$IFNDEF FPC}
+constructor TZGenericTestDataSet.Create(MethodName: string);
+begin
+  inherited;
+
+  FTokenizer := TZGenericSQLTokenizer.Create as IZTokenizer;
+end;
+{$ELSE}
+constructor TZGenericTestDataSet.Create;
+begin
+  inherited;
+
+  FTokenizer := TZGenericSQLTokenizer.Create as IZTokenizer;
+end;
+{$ENDIF}
 
 procedure TZGenericTestDataSet.TestConnection;
 var
@@ -1512,14 +1534,14 @@ begin
     Query.SQL.Text := 'SELECT p_id, p_dep_id, p_name FROM people';
     Query.Open;
 
-    DefineSortedFields(Query, 'p_id', FieldRefs, FieldComparsionKinds, OnlyDataFields);
+    DefineSortedFields(Query, 'p_id', FTokenizer, FieldRefs, FieldComparsionKinds, OnlyDataFields);
     CheckEquals(1, Length(FieldRefs));
     Check(Pointer(Query.Fields[0]) = FieldRefs[0].Field);
     CheckEquals(1, Length(FieldComparsionKinds));
     CheckEquals(Ord(ckAscending), Ord(FieldComparsionKinds[0]));
     CheckEquals(True, OnlyDataFields);
 
-    DefineSortedFields(Query, 'p_id ASC, p_name DESC', FieldRefs,
+    DefineSortedFields(Query, 'p_id ASC, p_name DESC', FTokenizer, FieldRefs,
       FieldComparsionKinds, OnlyDataFields);
     CheckEquals(2, Length(FieldRefs));
     Check(Pointer(Query.Fields[0]) = FieldRefs[0].Field);
@@ -2938,7 +2960,7 @@ procedure TZGenericTestDataSet.RunDefineFields;
 var
   Bool: Boolean;
 begin
-  DefineFields(FQuery, FFieldList, Bool, CommonTokenizer);
+  DefineFields(FQuery, FFieldList, Bool, FTokenizer);
 end;
 
 procedure TZGenericTestDataSet.RunDefineSortedFields;
@@ -2947,7 +2969,7 @@ var
   CompareKinds: TComparisonKindArray;
   Fields: TZFieldsLookUpDynArray;
 begin
-  DefineSortedFields(FQuery, FFieldList, Fields, CompareKinds, Bool);
+  DefineSortedFields(FQuery, FFieldList, FTokenizer, Fields, CompareKinds, Bool);
 end;
 
 procedure TZGenericTestDataSet.TestDefineFields;
@@ -2958,7 +2980,7 @@ procedure TZGenericTestDataSet.TestDefineFields;
     Fields: TZFieldsLookUpDynArray;
     i: Integer;
   begin
-    Fields := DefineFields(FQuery, FieldList, Bool, CommonTokenizer);
+    Fields := DefineFields(FQuery, FieldList, Bool, FTokenizer);
     CheckEquals(Length(Expect), Length(Fields), 'FieldList "' + FieldList + '" - item count');
     for i := Low(Fields) to High(Fields) do
       CheckSame(Expect[i], TField(Fields[i].Field), 'FieldList "' + FieldList + '" - item #' + ZFastCode.IntToStr(i));
@@ -3008,7 +3030,7 @@ procedure TZGenericTestDataSet.TestDefineSortedFields;
     CompareKinds: TComparisonKindArray;
     i: Integer;
   begin
-    DefineSortedFields(FQuery, FieldList, Fields, CompareKinds, Bool);
+    DefineSortedFields(FQuery, FieldList, FTokenizer, Fields, CompareKinds, Bool);
     CheckEquals(Length(ExpectFields), Length(Fields), 'FieldList "' + FieldList + '" - item count');
     CheckEquals(Length(ExpectCompareKinds), Length(CompareKinds), 'FieldList "' + FieldList + '" - item count');
     for i := Low(Fields) to High(Fields) do

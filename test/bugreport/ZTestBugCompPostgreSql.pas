@@ -122,6 +122,8 @@ type
     procedure TestSF478;
     procedure TestPgTruncScale;
     procedure TestInfinityNan;
+    procedure TestSF611_1;
+    procedure TestSF611_2;
   end;
 
   TZTestCompPostgreSQLBugReportMBCs = class(TZAbstractCompSQLTestCaseMBCs)
@@ -138,7 +140,7 @@ type
 implementation
 {$IFNDEF ZEOS_DISABLE_POSTGRESQL}
 
-uses ZSysUtils, ZTestCase, ZPgEventAlerter, DateUtils, ZEncoding,
+uses ZSysUtils, ZTestCase, ZPgEventAlerter, DateUtils, ZEncoding, ZVariant,
   ZDbcPostgreSqlMetadata, ZPlainPostgreSqlDriver, ZDatasetUtils, ZFormatSettings,
   (*{$IFDEF WITH_VCL_PREFIX}Vcl.Forms{$ELSE}Forms{$ENDIF}*)ZTestConfig
   {$IFDEF WITH_TDATASETPROVIDER},Provider, DBClient{$ENDIF}, Math;
@@ -1644,6 +1646,69 @@ begin
   end;
 
 end;
+
+procedure TZTestCompPostgreSQLBugReport.TestSF611_1;
+var
+  Query: TZQuery;
+begin
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'select * from sf611 order by 1';
+    Query.Open;
+    CheckEquals(10, Query.RecordCount);
+    CheckEquals(0.9, Query.FieldByName('num').AsFloat, FLOAT_COMPARE_PRECISION);
+    Query.Next;
+    CheckEquals(9, Query.FieldByName('num').AsFloat);
+    Query.Next;
+    CheckEquals(20000, Query.FieldByName('num').AsFloat);
+    Query.Next;
+    CheckEquals(20001, Query.FieldByName('num').AsFloat);
+    Query.Next;
+    CheckEquals(31000000, Query.FieldByName('num').AsFloat);
+    Query.Next;
+    CheckEquals(31000000.1, Query.FieldByName('num').AsFloat, FLOAT_COMPARE_PRECISION);
+    Query.Next;
+    CheckEquals(310000000, Query.FieldByName('num').AsFloat);
+    Query.Next;
+    CheckEquals(310000000.9, Query.FieldByName('num').AsFloat, FLOAT_COMPARE_PRECISION);
+    Query.Next;
+    CheckEquals(310000000000, Query.FieldByName('num').AsFloat, FLOAT_COMPARE_PRECISION);
+    Query.Next;
+    CheckEquals(FloatToStr(310000000000.9), Query.FieldByName('num').AsString);
+  finally
+    FreeAndNil(Query);
+  end;
+end;
+
+procedure TZTestCompPostgreSQLBugReport.TestSF611_2;
+var
+  Query: TZQuery;
+begin
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'select * from sf611 order by 1';
+    Query.Open;
+    CheckEquals(10, Query.RecordCount);
+    Query.Next;
+    CheckEquals(9, Query.FieldByName('num').AsInteger);
+    Query.Next;
+    CheckEquals(20000, Query.FieldByName('num').AsInteger);
+    Query.Next;
+    CheckEquals(20001, Query.FieldByName('num').AsInteger);
+    Query.Next;
+    CheckEquals( 31000000, Query.FieldByName('num').AsInteger);
+    Query.Next;//31000000.1
+    Query.Next;
+    CheckEquals( 310000000, Query.FieldByName('num').AsInteger);
+    Query.Next;
+    Query.Next;
+    CheckEquals(310000000000, TZFmtBCDField(Query.FieldByName('num')).AsLargeInt);
+  finally
+    FreeAndNil(Query);
+  end;
+end;
+
+
 
 initialization
   RegisterTest('bugreport',TZTestCompPostgreSQLBugReport.Suite);

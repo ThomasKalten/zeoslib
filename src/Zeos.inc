@@ -175,6 +175,7 @@
     {$DEFINE VER150BELOW}                   //found in ZTestBugCompPostgreSql.pas
     {$DEFINE WITH_OVERLOAD_BUG}             //D7 Bug -> ambiguous overload error when both Func(Integer) and Func(Cardinal) exist and Func(a: Byte/Word) is called
     {$IF CompilerVersion >= 16} //Delphi 8+
+      {$DEFINE WITH_WIDECHAR_STRLEN}
       {$IF CompilerVersion >= 17} //Delphi 2005+
         {$DEFINE WITH_INLINE}          // compiler supports inline methodes
         {$DEFINE WITH_C5242_OR_C4963_INTERNAL_ERROR} //D2005..2009 Has an internal error with some inlined endian swap code.
@@ -246,6 +247,7 @@
               {$IF CompilerVersion >= 21} //Delphi 2010+
                 {$WEAKLINKRTTI ON}                    //suppress extended RTTI
                 {.$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])} //suppress extended RTTI for some unknown reason we've compilation issues. So enable this define manually!
+                {$DEFINE WITH_RECORD_METHODS}         //compiler support methods in records
                 {$DEFINE WITH_TSQLTimeStampOffset}    //The TSQLTimeStampOffset is declared in SqlTimSt.pas
                 {$DEFINE WITH_DEPRECATED_MESSAGE}     //Compiler supports deprecated messages
                 {$UNDEF WITH_INLINE_ANSICOMPARETEXT}  // AnsiCompareText is no more inline declared
@@ -595,7 +597,7 @@
 {$IFNDEF ZEOS_DISABLE_PROXY}
   {$IF DEFINED(HAVE_UNICODESTRING) AND ((NOT DEFINED(FPC)) OR (DEFINED(WINDOWS)))}
     {$DEFINE ENABLE_PROXY}
-    {$IF NOT DEFINED(FPC) AND DEFINED(ZEOS_PROXY_USE_INTERNAL_PROXY)}
+    {$IF NOT DEFINED(FPC) AND DEFINED(ZEOS_PROXY_USE_INTERNAL_PROXY) AND (CompilerVersion >= 22)} //Delphi XE+
        {$DEFINE ENABLE_INTERNAL_PROXY}
     {$IFEND}
   {$IFEND}

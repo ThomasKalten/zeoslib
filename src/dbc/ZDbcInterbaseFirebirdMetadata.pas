@@ -451,9 +451,8 @@ var
   isc_info: Byte;
   P: PChar;
   PA: PAnsiChar absolute P;
-  L: NativeUInt;
+  FbPos: Integer;
 begin
-  {$IFDEF WITH_VAR_INIT_WARNING}L := 0;{$ENDIF}
   if FServerVersion = '' then begin
     Connection := Metadata.GetConnection;
     isc_info := isc_info_version;
@@ -462,7 +461,7 @@ begin
       Attachment := FBConnection.GetAttachment;
       Status := FBConnection.GetStatus;
       Attachment.getInfo(Status, 1, @isc_info, SizeOf(Buffer), @Buffer[0]);
-      if (Status.getState and {$IFDEF WITH_CLASS_CONST}IStatus.STATE_ERRORS{$ELSE}IStatus_STATE_ERRORS{$ENDIF}) <> 0 then
+      if (Status.getState and cIStatus_STATE_ERRORS) <> 0 then
         FBConnection.HandleErrorOrWarning(lcOther, PARRAY_ISC_STATUS(Status.getErrors), 'IAttachment.getInfo', FBConnection);
     {$IFNDEF ZEOS_DISABLE_INTERBASE}end else {$ELSE}end;{$ENDIF}
     {$ENDIF ZEOS_DISABLE_FIREBIRD}
@@ -488,7 +487,8 @@ begin
     then FServerVersion := ConvertConnRawToString({$IFDEF UNICODE}
       Connection.GetConSettings, {$ENDIF}@Buffer[5], Integer(Buffer[4]))
     else FServerVersion := '';
-    FIsFireBird := ZFastCode.Pos('Firebird', FServerVersion) > 0;
+    FbPos := ZFastCode.Pos('Firebird', FServerVersion);
+    FIsFireBird := FbPos > 0;
     FProductVersion := Copy(FServerVersion, ZFastCode.Pos(DBProvider[FIsFireBird],
       FServerVersion)+8+Ord(not FIsFireBird)+1, Length(FServerVersion));
     I := ZFastCode.Pos('.', FProductVersion);
@@ -499,20 +499,14 @@ begin
     else
       tmp := Copy(FProductVersion, I+1, MaxInt);
     FHostVersion := FHostVersion + StrToInt(tmp)*1000;
-    { determine release version see http://www.firebirdfaq.org/faq223/ }
-    if FIsFireBird and (FHostVersion > 2001000) then begin
-      with Connection.CreateStatement.ExecuteQuery('SELECT rdb$get_context(''SYSTEM'', ''ENGINE_VERSION'') from rdb$database') do begin
-        if Next then begin
-          PA := GetPAnsiChar(FirstDbcIndex, L);
-          Inc(PA, NativeInt(L));
-          I := 0;
-          while (PByte(PA-1)^ <> Byte('.')) do begin
-            Dec(PA);
-            Inc(I);
-          end;
-          FHostVersion := FHostVersion+RawToIntDef(PA, PA+I, 0);
-        end;
-        Close;
+    if FIsFireBird and (Copy(FServerVersion, FirstStringIndex, 8) = 'WI-V6.3.') then begin
+      tmp := FServerVersion;
+      Delete(tmp, FbPos - 1, length(tmp));
+      Delete(tmp, FirstStringIndex, 8);
+      FbPos := ZFastCode.Pos('.', tmp);
+      if FbPos > 0 then begin
+        Delete(tmp, FbPos, length(tmp));
+        FHostVersion := FHostVersion + StrToIntDef(tmp, 0);
       end;
     end;
   end;
@@ -2366,32 +2360,25 @@ function TZInterbase6DatabaseMetadata.UncachedGetCrossReference(
 var
   SQL, PKTable, FKTable: String;
 begin
-  PKTable := ConstructNameCondition(AddEscapeCharToWildcards(PrimaryTable), 'RELC_PK.RDB$RELATION_NAME');
-  FKTable := ConstructNameCondition(AddEscapeCharToWildcards(ForeignTable), 'RELC_FK.RDB$RELATION_NAME');
+  PKTable := ConstructNameCondition(AddEscapeCharToWildcards(PrimaryTable), 'PK.RDB$RELATION_NAME');
+  FKTable := ConstructNameCondition(AddEscapeCharToWildcards(ForeignTable), 'FK.RDB$RELATION_NAME');
 
   SQL := 'SELECT '+
-    'NULL AS PKTABLE_CAT, '+
-    'NULL AS PKTABLE_SCHEM, '+
-    'RELC_PK.RDB$RELATION_NAME AS PKTABLE_NAME, '+
-    'IS_PK.RDB$FIELD_NAME AS PKCOLUMN_NAME, '+
-    'NULL AS FKTABLE_CAT, '+
-    'NULL AS FKTABLE_SCHEM, '+
-    'RELC_FK.RDB$RELATION_NAME as FKTABLE_NAME, '+
-    'IS_FK.RDB$FIELD_NAME AS FKCOLUMN_NAME, '+
-    'IS_FK.RDB$FIELD_POSITION+1 AS KEY_SEQ, '+
-    GetRuleTypeString('REFC_FK.RDB$UPDATE_RULE', 'UPDATE_RULE')+', '+
-    GetRuleTypeString('REFC_FK.RDB$DELETE_RULE', 'DELETE_RULE')+', '+
-    'RELC_FK.RDB$CONSTRAINT_NAME AS FK_NAME, '+
-    'RELC_PK.RDB$INDEX_NAME as PK_NAME, '+
-    GetDereferabilityTypeString('RELC_FK')+
-    ' FROM RDB$RELATION_CONSTRAINTS RELC_FK'+
-    ' INNER JOIN RDB$INDEX_SEGMENTS IS_FK ON IS_FK.RDB$INDEX_NAME = RELC_FK.RDB$INDEX_NAME'+
-    ' INNER JOIN RDB$REF_CONSTRAINTS REFC_FK ON RELC_FK.RDB$CONSTRAINT_NAME = REFC_FK.RDB$CONSTRAINT_NAME'+
-    ' INNER JOIN RDB$RELATION_CONSTRAINTS RELC_PK ON RELC_PK.RDB$CONSTRAINT_NAME = REFC_FK.RDB$CONST_NAME_UQ'+
-    ' INNER JOIN RDB$INDEX_SEGMENTS IS_PK ON IS_PK.RDB$INDEX_NAME = RELC_PK.RDB$INDEX_NAME'+
-    ' WHERE RELC_FK.RDB$CONSTRAINT_TYPE = ''FOREIGN KEY'' '+
-    AppendCondition(PKTable)+ AppendCondition(FKTable)+
-    ' ORDER BY RELC_FK.RDB$RELATION_NAME, IS_FK.RDB$FIELD_POSITION';
+    'NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, PK.RDB$RELATION_NAME AS PKTABLE_NAME, ISP.RDB$FIELD_NAME AS PKCOLUMN_NAME, NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, ' +
+    'FK.RDB$RELATION_NAME AS FKTABLE_NAME, ISF.RDB$FIELD_NAME AS FKCOLUMN_NAME, (ISP.RDB$FIELD_POSITION + 1) AS KEY_SEQ, ' +
+    GetRuleTypeString('RC.RDB$UPDATE_RULE', 'UPDATE_RULE') + ', ' +
+    GetRuleTypeString('RC.RDB$DELETE_RULE', 'DELETE_RULE') + ', ' +
+    'FK.RDB$CONSTRAINT_NAME AS FK_NAME, PK.RDB$CONSTRAINT_NAME AS PK_NAME, ' +
+    GetDereferabilityTypeString('FK') + ' ' +
+    'FROM ' +
+    'RDB$RELATION_CONSTRAINTS PK, RDB$RELATION_CONSTRAINTS FK, RDB$REF_CONSTRAINTS RC, RDB$INDEX_SEGMENTS ISP, RDB$INDEX_SEGMENTS ISF ' +
+    'WHERE ' +
+    'FK.RDB$CONSTRAINT_NAME = RC.RDB$CONSTRAINT_NAME AND PK.RDB$CONSTRAINT_NAME = RC.RDB$CONST_NAME_UQ AND ISP.RDB$INDEX_NAME = PK.RDB$INDEX_NAME AND ' +
+    'ISF.RDB$INDEX_NAME = FK.RDB$INDEX_NAME AND ISP.RDB$FIELD_POSITION = ISF.RDB$FIELD_POSITION ' +
+    AppendCondition(PKTable) + ' ' + AppendCondition(FKTable) + ' ' +
+    'ORDER BY ' +
+    'FK.RDB$RELATION_NAME, ISP.RDB$FIELD_POSITION';
+
   Result := CopyToVirtualResultSet(
     CreateStatement.ExecuteQuery(SQL),
     ConstructVirtualResultSet(CrossRefColumnsDynArray));

@@ -65,12 +65,15 @@ interface
 {*********************************************************}
 
 uses
-  Classes, SysUtils, DbcProxySecurityModule, IniFiles, ldapsend;
+  Classes, SysUtils, DbcProxySecurityModule, dbcproxyconfigstore, IniFiles, ldapsend;
 
 type
   TZLdapSecurityModule = class(TZAbstractSecurityModule)
   protected
     FHostName: String;
+    FPort: Word;
+    FUseSSL: Boolean;
+    FUseStartTLS: Boolean;
     FUserNameMask: String;
     FUserLookupExpression: String;
     FBaseDN: String;
@@ -78,7 +81,7 @@ type
     FReplacementPassword: String;
   public
     function CheckPassword(var UserName, Password: String; const ConnectionName: String): Boolean; override;
-    procedure LoadConfig(IniFile: TIniFile; const Section: String); override;
+    procedure LoadConfig(Values: IZDbcProxyKeyValueStore); override;
   end;
 
 {$ENDIF}
@@ -87,7 +90,7 @@ implementation
 
 {$IFDEF ENABLE_LDAP_SECURITY}
 
-uses ssl_openssl11;
+uses ssl_openssl3, ssl_openssl3_lib;
 
 function TZLdapSecurityModule.CheckPassword(var UserName, Password: String; const ConnectionName: String): Boolean;
 var
@@ -98,10 +101,21 @@ begin
   Result := False;
   Ldap := TLDAPSend.Create;
   try
+    if FUseSSL or FUseStartTLS then begin
+      {$IF DECLARED(SslCtxLoadVerifyStore) and DEFINED(MSWINDOWS)}
+      Ldap.Sock.SSL.CertCAFile := 'org.openssl.winstore://';
+      {$IFEND}
+      Ldap.Sock.SSL.VerifyCert := True;
+    end;
     Ldap.TargetHost := FHostName;
     Ldap.UserName := Format(FUserNameMask, [UserName]);
     Ldap.Password := Password;
+    if FUseSSL then
+      LDAP.FullSSL := True;
     if Ldap.Login then begin
+      if FUseStartTLS then
+        if not Ldap.StartTLS then
+          Exit;
       if Ldap.Bind then begin
         if FUserLookupExpression = '' then
           Result := True
@@ -131,15 +145,24 @@ begin
   end;
 end;
 
-procedure TZLdapSecurityModule.LoadConfig(IniFile: TIniFile; const Section: String);
+procedure TZLdapSecurityModule.LoadConfig(Values: IZDbcProxyKeyValueStore);
+var
+  SslMode: String;
 begin
-  inherited;
-  FHostName := IniFile.ReadString(Section, 'Host Name', '');
-  FUserNameMask := IniFile.ReadString(Section, 'User Name Mask', '%s');
-  FUserLookupExpression := IniFile.ReadString(Section, 'User Lookup Expression', '(sAMAccountName=%s)');
-  FBaseDN := IniFile.ReadString(Section, 'Base DN', '');
-  FReplacementUser := IniFile.ReadString(Section, 'Replacement User', '');
-  FReplacementPassword := IniFile.ReadString(Section, 'Replacement Password', '');
+  FHostName := Values.ReadString('Host Name', '');
+  SslMode := LowerCase(Values.ReadString('TLS Mode', 'tls'));
+  if SslMode = 'tls' then
+    FUseSSL := True
+  else if SslMode = 'starttls' then
+    FUseStartTLS := True;
+  FPort := StrToIntDef(Values.ReadString('Port', 'tls'), 0);
+  if (FPort = 0) and FUseSSL then
+    FPort := 636;
+  FUserNameMask := Values.ReadString('User Name Mask', '%s');
+  FUserLookupExpression := Values.ReadString('User Lookup Expression', '(sAMAccountName=%s)');
+  FBaseDN := Values.ReadString('Base DN', '');
+  FReplacementUser := Values.ReadString('Replacement User', '');
+  FReplacementPassword := Values.ReadString('Replacement Password', '');
 end;
 
 {$ENDIF}

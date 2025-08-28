@@ -68,6 +68,7 @@ type
     FUpdateCounter: Integer;
     FErrorCounter: Integer;
     procedure TestSF279CalcFields(DataSet: TDataSet);
+    procedure TestForum250606AfterScroll(DataSet: TDataSet);
   public
     procedure DataSetCalcFields(Dataset: TDataSet);
     procedure DataSetBeforeScroll({%H-}Dataset: TDataSet);
@@ -139,6 +140,9 @@ type
     procedure TestSF600;
     // A test for https://zeoslib.sourceforge.io/viewtopic.php?t=200781
     procedure TestForum200781;
+    procedure TestPR116;
+    // A test for https://zeoslib.sourceforge.io/viewtopic.php?t=250606
+    procedure TestForum250606;
   end;
 
   {** Implements a bug report test case for core components with MBCs. }
@@ -2229,6 +2233,79 @@ begin
     Table.Close;
   finally
     FreeAndNil(Table);
+  end;
+end;
+
+procedure ZTestCompCoreBugReport.TestPR116;
+var
+  Q: TZQuery;
+  Works: Boolean;
+begin
+  Works := False;
+  Q := CreateQuery;
+  try
+    Q.Close;
+    Q.SQL.Text := 'delete from number_values where n_id in (1001, 1002, 1003, 1003, 1004, 1005)';
+    Q.ExecSQL;
+
+    Q.Close;
+    Q.SQL.Text := '';
+    try
+      Q.ExecSQL;
+      Works := False;
+    except
+      Works := True;
+    end;
+    Check(Works, 'An exception was expected for an empty statement.')
+  finally
+    FreeAndNil(Q);
+  end;
+end;
+
+procedure ZTestCompCoreBugReport.TestForum250606AfterScroll(DataSet: TDataSet);
+var
+  x: Integer;
+begin
+  x := DataSet.FieldByName('p_id').AsInteger;
+  //CheckEquals(5, x);
+end;
+
+// A test for https://zeoslib.sourceforge.io/viewtopic.php?t=250606
+procedure ZTestCompCoreBugReport.TestForum250606;
+var
+  MasterQuery: TZQuery;
+  DetailQuery: TZQuery;
+  MasterDataSource: TDataSource;
+begin
+  try
+    MasterQuery := CreateQuery;
+    MasterDataSource := TDataSource.Create(nil);
+    MasterDataSource.DataSet := MasterQuery;
+    DetailQuery := CreateQuery;
+    DetailQuery.DataSource := MasterDataSource;
+    DetailQuery.AfterScroll := TestForum250606AfterScroll;
+
+    MasterQuery.SQL.Text := 'SELECT * FROM department ORDER BY dep_id desc';
+    MasterQuery.Open;
+
+    DetailQuery.SQL.Text := 'SELECT * FROM people WHERE p_dep_id=:dep_id';
+    DetailQuery.DataSource := MasterDataSource;
+    DetailQuery.Open;
+
+    MasterQuery.First;
+    CheckEquals(1, DetailQuery.RecordCount);
+    MasterQuery.Next;
+    CheckEquals(2, DetailQuery.RecordCount);
+    DetailQuery.Last;
+    MasterQuery.First;
+    CheckEquals(1, DetailQuery.RecordCount);
+  finally
+    if Assigned(DetailQuery) then
+      FreeAndNil(DetailQuery);
+    if Assigned(MasterDataSource) then
+      FreeAndNil(MasterDataSource);
+    if Assigned(MasterQuery) then
+      FreeAndNil(MasterQuery);
   end;
 end;
 

@@ -165,6 +165,7 @@ type
     FRowsAffected: Integer;
 
     FFilterEnabled: Boolean;
+    FTokenizer: IZTokenizer;
     FFilterExpression: IZExpression;
     FFilterStack: TZExecutionStack;
     FFilterFieldRefs: TZFieldsLookUpDynArray;
@@ -210,6 +211,7 @@ type
 
     FIndexFields: {$IFDEF WITH_GENERIC_TLISTTFIELD}TList<TField>{$ELSE}TList{$ENDIF};
     FLobCacheMode: TLobCacheMode;
+    FLastState: TDataSetState;
     FSortType : TSortType;
     FHasOutParams: Boolean;
     FSortedFields: string;
@@ -217,7 +219,7 @@ type
     FSortedFieldIndices: TIntegerDynArray;
     FSortedComparsionKinds: TComparisonKindArray;
     FSortedOnlyDataFields: Boolean;
-    FCompareFuncs: TCompareFuncs;
+    FCompareFuncs: TZCompareFuncs;
     FSortRowBuffer1: PZRowBuffer;
     FSortRowBuffer2: PZRowBuffer;
     FPrepared: Boolean;
@@ -318,6 +320,7 @@ type
     procedure RaiseWriteStateError;
     procedure RaiseFieldTypeMismatchError(const AField: TField; AFieldDef: TFieldDef);
     procedure RaiseFieldSizeMismatchError(const AField: TField; AFieldDef: TFieldDef);
+    procedure SetActive(Value: Boolean); Override;
     function FetchOneRow: Boolean;
     function FetchRows(RowCount: Integer): Boolean;
     function FilterRow(RowNo: NativeInt): Boolean;
@@ -1103,6 +1106,9 @@ type
     FBound, FIsValidating: Boolean;
     function FilledValueWasNull(var Value: TBCD): Boolean;
     function IsRowDataAvailable: Boolean;
+    {$IFNDEF TFIELD_HAS_ASLARGEINT}
+    function GetAsLargeInt: LargeInt;
+    {$ENDIF}
   protected
     function GetIsNull: Boolean; override;
     function GetAsCurrency: Currency; override;
@@ -1118,6 +1124,7 @@ type
     procedure Bind(Binding: Boolean); {$IFDEF WITH_VIRTUAL_TFIELD_BIND}override;{$ENDIF}
   public
     procedure Clear; override;
+    {$IFNDEF TFIELD_HAS_ASLARGEINT}property AsLargeInt: LargeInt read GetAsLargeInt write SetAsLargeInt;{$ENDIF}
   end;
 
   TZGuidField = class(TGuidField)
@@ -1664,7 +1671,8 @@ begin
   FFilterEnabled := False;
   FProperties := TStringList.Create;
   FFilterExpression := TZExpression.Create;
-  FFilterExpression.Tokenizer := CommonTokenizer;
+  FTokenizer := TZGenericSQLTokenizer.Create as IZTokenizer;
+  FFilterExpression.Tokenizer := FTokenizer;
   FFilterStack := TZExecutionStack.Create;
 
   FDataLink := TZDataLink.Create(Self);
@@ -1693,12 +1701,7 @@ destructor TZAbstractRODataset.Destroy;
 begin
   Unprepare;
   if Assigned(Connection) then
-  begin
-    try
-      SetConnection(nil);
-    except
-    end;
-  end;
+    SetConnection(nil);
 
   FreeAndNil(FSQL);
   FreeAndNil(FParams);
@@ -2058,6 +2061,16 @@ begin
   raise EZDatabaseError.Create(Format(SFieldReadOnly, [Field.DisplayName]));
 end;
 
+procedure TZAbstractRODataset.SetActive(Value: Boolean);
+begin
+  inherited;
+
+  {$IFNDEF DISABLE_ZPARAM}
+  if (FParams <> nil) And Not Value then
+    FParams.FlushParameterConSettings;
+  {$ENDIF}
+end;
+
 procedure TZAbstractRODataset.RaiseFieldSizeMismatchError(const AField: TField;
   AFieldDef: TFieldDef);
 begin
@@ -2102,19 +2115,35 @@ end;
 function TZAbstractRODataset.FetchRows(RowCount: Integer): Boolean;
 begin
   if (CurrentRows.Count < RowCount) or (RowCount = 0) then
-    if FLastRowFetched
-    then Result := CurrentRows.Count >= RowCount
-    else begin
+    if FLastRowFetched then
+      Result := CurrentRows.Count >= RowCount
+    else
+    begin
       if Connection <> nil then
         Connection.ShowSQLHourGlass;
+
       try
-        if (RowCount = 0) then begin
+        if (RowCount = 0) then
+        begin
           while FetchOneRow do;
           Result := True;
-        end else begin
+        end
+        else
+        if FFetchRow = 0 then
+        begin
           while (CurrentRows.Count < RowCount) do
             if not FetchOneRow then
               Break;
+          Result := CurrentRows.Count >= RowCount;
+        end
+        else
+        begin
+          While (CurrentRows.Count < (RowCount Div FFetchRow + 1) * FFetchRow) Do
+          Begin
+            If Not FetchOneRow Then
+              Break;
+          End;
+
           Result := CurrentRows.Count >= RowCount;
         end;
       finally
@@ -2122,7 +2151,8 @@ begin
           Connection.HideSQLHourGlass;
       end;
     end
-  else Result := True;
+  else
+    Result := True;
 end;
 
 {**
@@ -2246,7 +2276,8 @@ begin
      Exit;
 
   { Check the record by filter expression. }
-  if FilterEnabled and (FilterExpression.Expression <> '') then begin
+  if FilterEnabled and (FilterExpression.Expression <> '') and
+     (State <> dsInactive){TempBuffer not available!} then begin
     SavedState := SetTempState(dsFilter);
     try
       GetCalcFields(TGetCalcFieldsParamType(TempBuffer));
@@ -3777,7 +3808,7 @@ begin
   end;
 end;
 
-type TProtectedPropField = class(TField);
+//type TProtectedPropField = class(TField);
 procedure TZAbstractRODataset.InternalOpen;
 var
   ColumnList: TObjectList;
@@ -3971,10 +4002,6 @@ begin
   {$ENDIF}
   if CurrentRows <> nil then
     CurrentRows.Clear;
-  {$IFNDEF DISABLE_ZPARAM}
-  if FParams <> nil then
-    FParams.FlushParameterConSettings;
-  {$ENDIF}
 end;
 
 {**
@@ -4034,12 +4061,6 @@ begin
   if Active then
     UpdateCursorPos;
   Result := CurrentRow;
-  //EH: load data chunked see https://sourceforge.net/p/zeoslib/tickets/399/
-  if not IsUniDirectional and not FLastRowFetched and
-    (CurrentRow = CurrentRows.Count) and (FFetchRow > 0) then begin
-    FetchRows(CurrentRows.Count+FFetchRow);
-    Resync([rmCenter]); //notify we've widened the records
-  end;
 end;
 
 {**
@@ -4455,10 +4476,20 @@ begin
   GotoRow(PZRowBuffer(Buffer)^.Index);
 end;
 
+function HasFilterExpression(DS: TZAbstractRODataset): Boolean; //suppress the _xStrClear
+begin
+  Result := (DS.FilterExpression.Expression <> '');
+end;
+
 procedure TZAbstractRODataset.DataEvent(Event: TDataEvent; Info: {$IFDEF FPC}PtrInt{$ELSE}NativeInt{$ENDIF});
 var I, j: Integer;
+  SavedLastState: TDataSetState;
 begin
+  SavedLastState := FLastState;
+  FLastState := State;
   inherited DataEvent(Event, Info);
+  if (SavedLastState = dsInactive) and (State = dsBrowse) and FilterEnabled and HasFilterExpression(Self) then
+    ReReadRows;
   if Event = deLayoutChange then
     for i := 0 to Fields.Count -1 do
       for j := 0 to high(FieldsLookupTable) do
@@ -5485,7 +5516,7 @@ begin
   //if FIndexFieldNames = '' then exit;
   if (ResultSet <> nil) and not IsUniDirectional then begin
     FIndexFieldNames := Trim(FIndexFieldNames);
-    DefineSortedFields(Self, {FSortedFields} FIndexFieldNames {bangfauzan modification},
+    DefineSortedFields(Self, {FSortedFields} FIndexFieldNames {bangfauzan modification}, FTokenizer,
     FSortedFieldRefs, FSortedComparsionKinds, FSortedOnlyDataFields);
 
     if (CurrentRow <= CurrentRows.Count) and (CurrentRows.Count > 0)
@@ -8863,6 +8894,16 @@ begin
     U := 0;
 end;
 {$IFDEF FPC} {$POP} {$ENDIF}
+
+{$IFNDEF TFIELD_HAS_ASLARGEINT}
+function TZFMTBCDField.GetAsLargeInt: LargeInt;
+var aValue: TBCD;
+begin
+  if FilledValueWasNull(aValue)
+  then Result := 0
+  else Result := ZSysUtils.BCD2Int64(aValue);
+end;
+{$ENDIF}
 
 function TZFMTBCDField.GetAsCurrency: Currency;
 begin
