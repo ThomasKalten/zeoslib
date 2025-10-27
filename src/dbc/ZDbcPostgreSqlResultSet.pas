@@ -546,6 +546,7 @@ type
     function CheckKeyColumn(ColumnIndex: Integer): Boolean; override;
   end;
 
+
   {** Implements a specialized cached resolver for PostgreSQL version 7.4 and up. }
   TZPostgreSQLCachedResolverV74up = class(TZPostgreSQLCachedResolver)
   public
