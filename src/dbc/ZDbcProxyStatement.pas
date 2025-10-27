@@ -57,7 +57,7 @@ interface
 
 {$IFDEF ENABLE_PROXY} //if set we have an empty unit
 uses
-  Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
+  Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, ZCbor,
   {$IF defined(UNICODE) and not defined(WITH_UNICODEFROMLOCALECHARS)}Windows,{$IFEND}
   ZDbcIntfs, ZDbcBeginnerStatement, ZDbcLogging,
   ZCompatibility, ZVariant, ZDbcGenericResolver, ZDbcCachedResultSet,
@@ -75,7 +75,8 @@ type
     IZProxyPreparedStatement)
   private
   protected
-    function CreateResultSet(const ResultStr: String): IZResultSet;
+    function CreateResultSet(const ResultStr: String): IZResultSet; overload;
+    function CreateResultSet(Item: TCborArr): IZResultSet; overload;
     /// <summary>
     ///   Encodes the parameters into an xml string that can be sent to the server.
     /// </summary>
@@ -133,12 +134,12 @@ implementation
 uses
   {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings, {$ENDIF}
   ZSysUtils, ZFastCode, ZMessages, ZDbcProxy, ZDbcProxyResultSet, ZDbcProxyUtils,
-  ZEncoding, ZTokenizer, ZClasses,
+  ZEncoding, ZTokenizer, ZClasses, {$IFNDEF NO_SAFECALL}ActiveX,{$ENDIF}
   // For the resolvers:
   ZDbcFirebirdInterbase, ZDbcASA,ZDbcDbLibResultSet, ZDbcOracle, ZDbcPostgreSqlResultSet,
   TypInfo, Variants, ZBase64, ZExceptions{$IFDEF ZEOS73UP}, FmtBcd{$ENDIF}
   {$IF defined(NO_INLINE_SIZE_CHECK) and not defined(UNICODE) and defined(MSWINDOWS)},Windows{$IFEND}
-  {$IFDEF NO_INLINE_SIZE_CHECK}, Math{$ENDIF};
+  {$IFDEF NO_INLINE_SIZE_CHECK}, Math{$ENDIF}{$IFDEF FPC}, ComObj{$ENDIF};
 
 var
   ProxyFormatSettings: TFormatSettings;
@@ -157,7 +158,45 @@ var
   CachedResultSet: TZCachedResultSet;
   CachedResolver: IZCachedResolver;
 begin
-  NativeResultSet := TZDbcProxyResultSet.Create(Connection, SQL, ResultStr);
+  NativeResultSet := TZDbcProxyResultSet.Create(Connection, SQL, {$IFNDEF UNICODE}UTF8Decode({$ENDIF}ResultStr{$IFNDEF UNICODE}){$ENDIF});
+  NativeResultSet.SetConcurrency(rcReadOnly);
+  LastUpdateCount := NativeResultSet.GetUpdateCount;
+
+  if (GetResultSetType = rtForwardOnly) or (GetResultSetConcurrency = rcUpdatable) then
+    NativeResultSet.SetType(rtForwardOnly);
+
+  if GetResultSetConcurrency = rcUpdatable then
+  begin
+    case GetConnection.GetServerProvider of
+      // The following cached resolvers cannot be used, because they need handles
+      // from their databases: ADO, MySQL, SQLite
+      spASA: CachedResolver := TZASACachedResolver.Create(self as IZStatement, NativeResultSet.GetMetaData) as IZCachedResolver;
+      spMSSQL, spASE: CachedResolver := TZDBLibCachedResolver.Create(self as IZStatement, NativeResultSet.GetMetaData) as IZCachedResolver;
+      spIB_FB: CachedResolver := TZInterbaseFirebirdCachedResolver.Create(self as IZStatement, NativeResultSet.GetMetaData) as IZCachedResolver;
+      spOracle: CachedResolver := TZOracleCachedResolver.Create(self as IZStatement, NativeResultSet.GetMetaData) as IZCachedResolver;
+      spPostgreSQL: CachedResolver := TZPostgreSQLCachedResolver.Create(self as IZStatement, NativeResultSet.GetMetaData) as IZCachedResolver;
+      else CachedResolver := TZGenericCachedResolver.Create(self as IZStatement, NativeResultSet.GetMetaData) as IZCachedResolver;
+    end;
+
+    CachedResultSet := TZCachedResultSet.Create(NativeResultSet, SQL, CachedResolver, ConSettings);
+    CachedResultSet.SetConcurrency(rcUpdatable);
+    LastResultSet := CachedResultSet;
+    Result := CachedResultSet;
+  end else begin
+    LastResultSet := NativeResultSet;
+    Result := NativeResultSet;
+  end;
+  if Result <> nil then
+    FOpenResultSet := Pointer(Result);
+end;
+
+function TZDbcProxyPreparedStatement.CreateResultSet(Item: TCborArr): IZResultSet;
+var
+  NativeResultSet: TZDbcProxyCborResultSet;
+  CachedResultSet: TZCachedResultSet;
+  CachedResolver: IZCachedResolver;
+begin
+  NativeResultSet := TZDbcProxyCborResultSet.Create(Connection, SQL, Item);
   NativeResultSet.SetConcurrency(rcReadOnly);
   LastUpdateCount := NativeResultSet.GetUpdateCount;
 
@@ -209,7 +248,7 @@ end;
 {$ELSE}
 function BcdParamToString(const Value: TBCD): String;
 begin
-  Result := BcdToSQLUni(Value);
+  Result := {$IFDEF UNICODE}BcdToSQLUni{$ELSE}BcdToSQLRaw{$ENDIF}(Value);
 end;
 {$ENDIF}
 
@@ -284,7 +323,7 @@ begin
             Line := DateTimeParamToStr(ClientVarManager.GetAsDateTime(InParamValues[x]));
           stAsciiStream, stUnicodeStream:
             if (InParamValues[x].VType = vtInterface) and Supports(InParamValues[x].VInterface, IZBlob, TempBlob) then begin
-              Line := StrParamToStr(TempBlob.GetUnicodeString);
+              Line := StrParamToStr(TempBlob.{$IFDEF UNICODE}GetUnicodeString{$ELSE}GetUTF8String{$ENDIF});
             end else begin
               Line := StrParamToStr(ClientVarManager.GetAsString(InParamValues[x]));
             end;
@@ -326,20 +365,84 @@ var
   Params: String;
   ResultStr: String;
   xSQL: ZWideString;
+  {$IFNDEF NO_SAFECALL}
+  CborStrI: IStream;
+  {$ENDIF}
+  CborStr: TStream;
+  CborItem: TCborItem;
+  CborRes: TCborArr;
+  S: Integer;
+  UseCbor: Boolean;
 const
   ResultSetStart = '<resultset ';
+  ZCborChangedRows = 1;
+  ZCborResultSet = 2;
+  ZCborError = 3;
 begin
-  Params := EncodeParams;
-  xSQL := {$IFDEF UNICODE}FWSQL{$ELSE}UTF8Decode(FASQL){$ENDIF};
-  ResultStr := (Connection as IZDbcProxyConnection).GetConnectionInterface.ExecuteStatement(xSQL, Params, GetMaxRows);
+  UseCbor := (Connection as IZDbcProxyConnection).SupportsCborQuery;
 
-  if copy(ResultStr, 1, length(ResultSetStart)) = ResultSetStart  then begin
-    Result := True;
-    CreateResultSet(ResultStr);
+  Params := EncodeParams;
+
+  xSQL := {$IFDEF UNICODE}FWSQL{$ELSE}UTF8Decode(FASQL){$ENDIF};
+
+  if not UseCbor then begin
+    ResultStr := {$IFNDEF UNICODE}UTF8Encode({$ENDIF}(Connection as IZDbcProxyConnection).GetConnectionInterface.ExecuteStatement(xSQL, {$IFNDEF UNICODE}UTF8ToString({$ENDIF}Params{$IFNDEF UNICODE}){$ENDIF}, GetMaxRows){$IFNDEF UNICODE}){$ENDIF};
+
+    if copy(ResultStr, 1, length(ResultSetStart)) = ResultSetStart  then begin
+      Result := True;
+      CreateResultSet(ResultStr);
+    end else begin
+      Result := False;
+      LastResultSet := nil;
+      LastUpdateCount := StrToInt(ResultStr);
+    end;
   end else begin
-    Result := False;
-    LastResultSet := nil;
-    LastUpdateCount := StrToInt(ResultStr);
+    {$IFNDEF NO_SAFECALL}
+    CborStrI := (Connection as IZDbcProxyConnection).GetConnectionInterface.ExecuteStatementCb(xSQL, {$IFNDEF UNICODE}UTF8ToString({$ENDIF}Params{$IFNDEF UNICODE}){$ENDIF}, GetMaxRows);
+    CborStr := TZOleStream.Create(CborStrI);
+    {$ELSE}
+    CborStr := (Connection as IZDbcProxyConnection).GetConnectionInterface.ExecuteStatementCb(xSQL, Params, GetMaxRows);
+    {$ENDIF}
+    try
+      S := CborStr.Size;
+      if s = 0 then
+        raise EZSQLException.Create('Stream must not have a size of zero!');
+      CborItem := TCborDecoding.Decode(CborStr)
+    finally
+      FreeAndNil(CborStr);
+    end;
+
+    try
+      if not (CborItem is TCborArr) then
+        raise EZSQLException.Create('Expected a TCborArr');
+
+      CborRes := CborItem as TCborArr;
+
+      if CborRes.Items[0].CBorType <> majUnsignedInt then
+        raise EZSQLException.Create('Expected a CBOR item of type unsigned Int.');
+
+      case (CborRes.Items[0] as TCborUINTItem).Value of
+        ZCborChangedRows: begin
+          Result := False;
+          LastResultSet := nil;
+          LastUpdateCount := (CborRes.Items[1] as TCborUINTItem).Value;
+        end;
+
+        ZCborResultSet: begin
+          Result := True;
+          CreateResultSet(CborRes);
+        end;
+
+        ZCborError:
+          raise EZSQLException.Create(String((CborRes.Items[1] as TCborUtf8String).Value));
+        else
+          raise EZSQLException.Create('Unknon CBOR query result type: ' + IntToStr((CborRes.Items[0] as TCborUINTItem).Value));
+      end;
+    except
+      if Assigned(CborItem) then
+        FreeAndNil(CborItem);
+      raise
+    end;
   end;
 
   inherited ExecutePrepared;

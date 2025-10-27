@@ -90,7 +90,7 @@ implementation
 
 {$IFDEF ENABLE_LDAP_SECURITY}
 
-uses ssl_openssl3, ssl_openssl3_lib;
+uses ssl_openssl3, ssl_openssl3_lib, zeosproxy_imp;
 
 function TZLdapSecurityModule.CheckPassword(var UserName, Password: String; const ConnectionName: String): Boolean;
 var
@@ -108,14 +108,17 @@ begin
       Ldap.Sock.SSL.VerifyCert := True;
     end;
     Ldap.TargetHost := FHostName;
+	Ldap.TargetPort := IntToStr(FPort);
     Ldap.UserName := Format(FUserNameMask, [UserName]);
     Ldap.Password := Password;
     if FUseSSL then
       LDAP.FullSSL := True;
     if Ldap.Login then begin
       if FUseStartTLS then
-        if not Ldap.StartTLS then
+        if not Ldap.StartTLS then begin
+          Logger.Error(Format('Could not STARTTLS on %s', [FHostName]));
           Exit;
+        end;
       if Ldap.Bind then begin
         if FUserLookupExpression = '' then
           Result := True
@@ -126,12 +129,19 @@ begin
             AttributeList.Add('*');
             if Ldap.Search(FBaseDN, false, Filter, AttributeList) then
               Result := Ldap.SearchResult.Count > 0;
+            if not Result then
+              Logger.Debug(Format('User %s failed LDAP search condition.', [UserName]));
           finally
             FreeAndNil(AttributeList);
           end;
         end;
-      end;
+      end else
+        Logger.Debug(Format('LDAP BIND failed for %s', [UserName]));
       Ldap.Logout;
+    end else begin
+      Logger.Debug(Format('LDAP login failed for %s', [UserName]));
+      Logger.Debug(Format('Last Socket error: %0:d, %1:s', [Ldap.Sock.LastError, Ldap.Sock.LastErrorDesc]));
+      Logger.Debug(Format('Last SSL error: %0:d, %1:s', [Ldap.Sock.SSL.LastError, Ldap.Sock.SSL.LastErrorDesc]));
     end;
   finally
     FreeAndNil(Ldap);
@@ -155,7 +165,7 @@ begin
     FUseSSL := True
   else if SslMode = 'starttls' then
     FUseStartTLS := True;
-  FPort := StrToIntDef(Values.ReadString('Port', 'tls'), 0);
+  FPort := StrToIntDef(Values.ReadString('Port', '0'), 0);
   if (FPort = 0) and FUseSSL then
     FPort := 636;
   FUserNameMask := Values.ReadString('User Name Mask', '%s');

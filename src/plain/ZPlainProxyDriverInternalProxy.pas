@@ -69,7 +69,7 @@ implementation
 
 {$IF DEFINED(ENABLE_PROXY) AND DEFINED(ENABLE_INTERNAL_PROXY)}
 
-uses SysUtils, {$IFNDEF NO_SAFECALL}ActiveX, ComObj,{$ENDIF} SOAPHTTPClient, ZExceptions, SOAPHTTPTrans, Types {$IFDEF TCERTIFICATE_HAS_PUBLICKEY}, Net.URLClient, Net.HttpClient{$ENDIF};
+uses SysUtils, ZClasses, {$IFNDEF NO_SAFECALL}ActiveX, ComObj,{$ENDIF} SOAPHTTPClient, ZExceptions, SOAPHTTPTrans, Types {$IFDEF HAVE_UNIT_URLCLIENT}, Net.URLClient, Net.HttpClient, System.Net.HttpClientComponent{$ENDIF HAVE_UNIT_URLCLIENT};
 
 type
   TZDbcProxy = class(TInterfacedObject, IZDbcProxy{$IFNDEF NO_SAFECALL}, ISupportErrorInfo{$ENDIF})
@@ -77,6 +77,10 @@ type
       FService: IZeosProxy;
       FConnectionID: WideString;
       FValidPublicKeys: TStringList;
+      {$IFDEF HAVE_UNIT_URLCLIENT}
+      HttpClient: THTTPClient;
+      {$ENDIF}
+      CBORUrl: String;
       procedure CheckConnected;
       // this is necessary for safecall exception handling
       {$IFNDEF NO_SAFECALL}
@@ -101,6 +105,7 @@ type
       procedure Rollback; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
       function SetProperties(const Properties : WideString): WideString; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
       function ExecuteStatement(const SQL, Parameters: WideString; const MaxRows: LongWord): WideString; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
+      function ExecuteStatementCb(const SQL, Parameters: WideString; const MaxRows: LongWord): {$IFDEF NO_SAFECALL}TStream{$ELSE}IStream{$ENDIF}; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
       function GetTables(const Catalog, SchemaPattern, TableNamePattern, Types: WideString): WideString; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
       function GetSchemas: WideString; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
       function GetCatalogs: WideString; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
@@ -210,6 +215,7 @@ var
   MyDbInfo: UnicodeString;
   PropList: TStringList;
   Certs: String;
+  x: Integer;
 begin
   FRIO := THTTPRIO.Create(nil);
   Url := ServiceEndpoint;
@@ -234,6 +240,19 @@ begin
     FConnectionID := FService.Connect(UserName, Password, DbName, MyInProperties, MyOutProperties, MyDbInfo);
     Properties := MyOutProperties;
     DbInfo := MyDbInfo;
+    {$IFDEF HAVE_UNIT_URLCLIENT}
+    HttpClient := THttpClient.Create;
+    HttpClient.CustomHeaders['Authorization'] := 'Bearer ' + FConnectionID;
+    x := Pos(WideString('://'), ServiceEndpoint);
+    x := Pos('/', ServiceEndpoint, x + 3);
+    if x > 0 then begin
+      CBORUrl := copy(ServiceEndpoint, 1, x);
+      CBORUrl := CBORUrl + 'ZeosProxy/cborquery';
+    end;
+    {$IFDEF TCERTIFICATE_HAS_PUBLICKEY}
+    HttpClient.OnValidateServerCertificate := ValidateServerCertificate;
+    {$ENDIF}
+    {$ENDIF}
   end else begin
     FreeAndNil(FRIO);
   end;
@@ -244,6 +263,10 @@ begin
  CheckConnected;
  try
    FService.Disconnect(FConnectionID);
+   {$IFDEF HAVE_UNIT_URLCLIENT}
+   if Assigned(HttpClient) then
+     FreeAndNil(HttpClient);
+   {$ENDIF}
  finally
    FConnectionID := '';
  end;
@@ -283,6 +306,46 @@ function TZDbcProxy.ExecuteStatement(const SQL, Parameters: WideString; const Ma
 begin
   CheckConnected;
   Result := FService.ExecuteStatement(FConnectionID, SQL, Parameters, MaxRows);
+end;
+
+function TZDbcProxy.ExecuteStatementCb(const SQL, Parameters: WideString; const MaxRows: LongWord): {$IFDEF NO_SAFECALL}TStream{$ELSE}IStream{$ENDIF}; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
+{$IFDEF HAVE_UNIT_URLCLIENT}
+var
+  Query: String;
+  Req: TStringStream;
+  Res: TMemoryStream;
+{$ENDIF}
+begin
+  {$IFDEF HAVE_UNIT_URLCLIENT}
+  try
+    Res := TMemoryStream.Create;
+    Query := '<query><sql>';
+    Query := Query + XMLEncode(SQL) + '</sql>';
+    Query := Query + Parameters;
+    Query := Query + '</query>';
+    Req := TStringStream.Create(Query, CP_UTF8);
+    try
+      HttpClient.Put(CBORUrl, Req, Res);
+    finally
+      FreeAndNil(Req);
+    end;
+
+    if Assigned(Res) then
+      {$IFNDEF NO_SAFECALL}
+      Result := TStreamAdapter.Create(Res, soOwned)
+      {$ELSE}
+      Result := Res
+      {$ENDIF}
+    else
+      Result := nil;
+  except
+    if Assigned(Res) then
+      FreeAndNil(Res);
+    raise;
+  end;
+  {$ELSE}
+  raise Exception.Create('Cannot execute CBOR query in this version of Delphi.');
+  {$ENDIF}
 end;
 
 function TZDbcProxy.GetTables(const Catalog, SchemaPattern, TableNamePattern, Types: WideString): WideString; {$IFNDEF NO_SAFECALL}safecall;{$ENDIF}
